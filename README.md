@@ -26,6 +26,7 @@ If the screen stays white, replace the installed TFT_eSPI `User_Setup.h` with th
 ## Features
 
 - Minimal touch UI with Home, Weather, Notes, Status, and Setup pages
+- Redesigned Home page with clock, weather, focus, note, and scrolling live ticker
 - Apple-inspired Weather page with current conditions, hourly forecast, and 7-day forecast
 - Focus timer with configurable presets and completion alert
 - Notes card for quick daily reminders
@@ -108,4 +109,3 @@ Then edit:
 ## CI And Pages
 
 The workflow at [`.github/workflows/build-and-pages.yml`](.github/workflows/build-and-pages.yml) compiles the firmware, uploads build artifacts, and deploys the browser installer from `web/` when changes land on `main`.
-

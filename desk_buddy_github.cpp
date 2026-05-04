@@ -205,6 +205,14 @@ String cacheTimerMenu = "";
 String cacheTimerDone = "";
 String cacheTimerDoneCountdown = "";
 String cacheTimerDoneFlash = "";
+String cacheHomeHero = "";
+String cacheHomeFocus = "";
+String cacheHomeForecast = "";
+String cacheHomeNote = "";
+String cacheHomeTicker = "";
+int homeTickerOffset = 0;
+unsigned long lastHomeTickerTick = 0;
+const unsigned long HOME_TICKER_TICK_MS = 160UL;
 
 String lastWifiText = "";
 String lastSignalText = "";
@@ -775,6 +783,23 @@ static String timerDoneCountdownText() {
 
 static String homeTitleText() {
   return buddyNickname.length() > 0 ? buddyNickname : "Deskbuddy";
+}
+
+static String homeTickerText() {
+  String source = insightSource.length() > 0 ? insightSource : "Live";
+  String body = insightBody.length() > 0 ? insightBody : "Use Setup to enable quotes or tech headlines.";
+  body.replace("\n", " ");
+  body.trim();
+  return source + "  -  " + body;
+}
+
+static String compactNoteText() {
+  String text = notesText;
+  text.replace("\n", " ");
+  text.trim();
+  if (text.length() == 0) text = "No notes yet.";
+  if (text.length() > 72) text = text.substring(0, 69) + "...";
+  return text;
 }
 
 int sanitizeTimerMinutes(int value) {
@@ -1793,6 +1818,127 @@ void drawHomeSlotWidget(int slot, bool force = false) {
   }
 }
 
+void drawHomeHero(bool force = false) {
+  time_t now = time(nullptr);
+  struct tm tmNow;
+  localtime_r(&now, &tmNow);
+
+  String timeBuf = formatClockParts(tmNow, false);
+  String dateBuf = formatDateParts(tmNow);
+  String condition = weatherConditionText(weatherCode);
+  String combined = timeBuf + "|" + dateBuf + "|" + tempText() + "|" + tempRangeText() + "|" +
+                    condition + "|" + locationName + "|" + wifiStatusText() + "|" +
+                    String(COL_PANEL) + "|" + String(COL_TEXT) + "|" + String(COL_ACCENT);
+  if (!force && combined == cacheHomeHero) return;
+  cacheHomeHero = combined;
+
+  drawCard(8, 40, 224, 82, true);
+  tft.fillRect(16, 48, 208, 66, COL_PANEL);
+
+  tft.setTextColor(COL_TEXT, COL_PANEL);
+  if (useUsRegionFormat()) {
+    int splitAt = timeBuf.lastIndexOf(' ');
+    String mainTime = splitAt > 0 ? timeBuf.substring(0, splitAt) : timeBuf;
+    String suffix = splitAt > 0 ? timeBuf.substring(splitAt + 1) : "";
+    tft.drawString(mainTime, 18, 52, 4);
+    if (suffix.length() > 0) tft.drawString(suffix, 84, 59, 2);
+  } else {
+    tft.drawString(timeBuf, 18, 52, 4);
+  }
+
+  tft.setTextColor(COL_DIM, COL_PANEL);
+  tft.drawString(dateBuf, 18, 84, 1);
+  tft.drawString(wifiStatusText(), 18, 101, 1);
+
+  tft.setTextColor(COL_TEXT, COL_PANEL);
+  tft.drawRightString(tempText().c_str(), 222, 52, 4);
+  tft.setTextColor(COL_ACCENT, COL_PANEL);
+  tft.drawRightString(condition.substring(0, 10).c_str(), 222, 84, 1);
+  tft.setTextColor(COL_DIM, COL_PANEL);
+  tft.drawRightString(locationName.substring(0, 12).c_str(), 222, 101, 1);
+}
+
+void drawHomeFocusCard(bool force = false) {
+  String value = formatTimerClock(focusRemainingSec);
+  String hint = focusHintText();
+  String combined = value + "|" + hint + "|" + String(focusTimerRunning ? 1 : 0) + "|" +
+                    String(focusTimerFinished ? 1 : 0) + "|" + String(COL_PANEL);
+  if (!force && combined == cacheHomeFocus) return;
+  cacheHomeFocus = combined;
+
+  drawCard(8, 128, 108, 58, true);
+  tft.fillRect(16, 136, 92, 42, COL_PANEL);
+  tft.setTextColor(COL_DIM, COL_PANEL);
+  tft.drawString("Focus", 18, 137, 1);
+  tft.setTextColor(focusTimerFinished ? COL_GREEN : COL_TEXT, COL_PANEL);
+  tft.drawString(value, 18, 151, 4);
+  tft.setTextColor(COL_ACCENT, COL_PANEL);
+  tft.drawRightString(hint.substring(0, 12).c_str(), 108, 174, 1);
+}
+
+void drawHomeForecastCard(bool force = false) {
+  String nextTemp = hourlyForecasts[1].valid ? formatDisplayTemp(hourlyForecasts[1].tempC) : tempRangeText();
+  String pop = hourlyForecasts[1].valid && !isnan(hourlyForecasts[1].precipProb)
+    ? String((int)roundf(hourlyForecasts[1].precipProb)) + "%"
+    : rainText();
+  String combined = nextTemp + "|" + pop + "|" + windText() + "|" + uvText() + "|" + String(COL_PANEL);
+  if (!force && combined == cacheHomeForecast) return;
+  cacheHomeForecast = combined;
+
+  drawCard(124, 128, 108, 58, true);
+  tft.fillRect(132, 136, 92, 42, COL_PANEL);
+  tft.setTextColor(COL_DIM, COL_PANEL);
+  tft.drawString("Next hour", 134, 137, 1);
+  tft.setTextColor(COL_TEXT, COL_PANEL);
+  tft.drawString(nextTemp, 134, 151, 4);
+  tft.setTextColor(COL_ACCENT, COL_PANEL);
+  tft.drawRightString(("Rain " + pop).c_str(), 224, 174, 1);
+}
+
+void drawHomeTicker(bool force = false) {
+  String ticker = homeTickerText();
+  String combined = ticker + "|" + String(COL_PANEL) + "|" + String(COL_TEXT) + "|" + String(COL_ACCENT);
+  if (force || combined != cacheHomeTicker) {
+    cacheHomeTicker = combined;
+    homeTickerOffset = 0;
+    drawCard(8, 194, 224, 36, true);
+  }
+
+  sprSmall.setColorDepth(16);
+  sprSmall.createSprite(208, 20);
+  sprSmall.fillSprite(COL_PANEL);
+  sprSmall.setTextDatum(TL_DATUM);
+  sprSmall.setTextColor(COL_ACCENT, COL_PANEL);
+  sprSmall.drawString("Live", 0, 2, 1);
+  sprSmall.setTextColor(COL_TEXT, COL_PANEL);
+
+  int textX = 34 - homeTickerOffset;
+  int textW = sprSmall.textWidth(ticker, 2);
+  sprSmall.drawString(ticker, textX, 1, 2);
+  if (textX + textW < 208) sprSmall.drawString(ticker, textX + textW + 44, 1, 2);
+  sprSmall.pushSprite(16, 202);
+  sprSmall.deleteSprite();
+
+  int loopW = textW + 44;
+  homeTickerOffset = loopW > 0 ? (homeTickerOffset + 4) % loopW : 0;
+}
+
+void drawHomeNoteCard(bool force = false) {
+  String note = compactNoteText();
+  String combined = note + "|" + nextSunLabel() + "|" + nextSunTimeText() + "|" + String(COL_PANEL);
+  if (!force && combined == cacheHomeNote) return;
+  cacheHomeNote = combined;
+
+  drawCard(8, 236, 224, 36, false);
+  tft.fillRect(16, 244, 208, 20, COL_PANEL);
+  tft.setTextColor(COL_DIM, COL_PANEL);
+  tft.drawString("Note", 18, 245, 1);
+  tft.setTextColor(COL_TEXT, COL_PANEL);
+  tft.drawString(note.substring(0, 24), 52, 245, 1);
+  tft.setTextColor(COL_ACCENT, COL_PANEL);
+  tft.drawRightString((nextSunLabel() + " " + nextSunTimeText()).c_str(), 224, 259, 1);
+}
+
 void drawFocusMenuOverlay(bool force = false) {
   String combined = String(focusTimerRunning ? 1 : 0) + "|" + String(focusTimerFinished ? 1 : 0) +
                     "|" + String(COL_PANEL_ALT) + "|" + String(COL_PANEL) + "|" + String(COL_ACCENT);
@@ -1895,6 +2041,12 @@ void drawHomePageFull() {
   cacheHomeEmpty1 = "";
   cacheHomeEmpty2 = "";
   cacheFocusTimer = "";
+  cacheHomeHero = "";
+  cacheHomeFocus = "";
+  cacheHomeForecast = "";
+  cacheHomeNote = "";
+  cacheHomeTicker = "";
+  homeTickerOffset = 0;
   for (int i = 0; i < HOME_SLOT_COUNT; i++) {
     cacheHomeSlots[i] = "";
   }
@@ -1902,10 +2054,11 @@ void drawHomePageFull() {
   pageDirty = false;
   lastDrawnPage = PAGE_HOME;
 
-  drawClockCardSprite(true);
-  for (int i = 0; i < HOME_SLOT_COUNT; i++) {
-    drawHomeSlotWidget(i, true);
-  }
+  drawHomeHero(true);
+  drawHomeFocusCard(true);
+  drawHomeForecastCard(true);
+  drawHomeTicker(true);
+  drawHomeNoteCard(true);
   if (focusMenuOpen) drawFocusMenuOverlay(true);
   if (timerDoneDialogOpen) drawTimerDoneOverlay(true);
 }
@@ -1921,10 +2074,11 @@ void updateHomeDynamic() {
     return;
   }
 
-  drawClockCardSprite(false);
-  for (int i = 0; i < HOME_SLOT_COUNT; i++) {
-    drawHomeSlotWidget(i, false);
-  }
+  drawHomeHero(false);
+  drawHomeFocusCard(false);
+  drawHomeForecastCard(false);
+  drawHomeTicker(false);
+  drawHomeNoteCard(false);
 }
 
 void drawWeatherPageFull() {
@@ -2314,6 +2468,18 @@ bool handleHomeTouch(int x, int y) {
   if (currentPage != PAGE_HOME) return false;
 
   if (focusMenuOpen) return handleFocusMenuTouch(x, y);
+
+  if (x >= 8 && x < 116 && y >= 128 && y < 186) {
+    if (focusTimerFinished) {
+      resetFocusTimer();
+    } else {
+      focusMenuOpen = true;
+      cacheHomeFocus = "";
+      cacheTimerMenu = "";
+    }
+    pageDirty = true;
+    return true;
+  }
 
   for (int slot = 0; slot < HOME_SLOT_COUNT; slot++) {
     if (homeWidgetSlots[slot] != HOME_WIDGET_TIMER) continue;
@@ -3008,6 +3174,12 @@ void loop() {
     updateCurrentPageDynamic();
     pageDirty = false;
     dataDirty = false;
+  }
+
+  if (currentPage == PAGE_HOME && !focusMenuOpen && !timerDoneDialogOpen &&
+      millis() - lastHomeTickerTick >= HOME_TICKER_TICK_MS) {
+    lastHomeTickerTick = millis();
+    drawHomeTicker(false);
   }
 
   if (millis() - lastClockTick >= CLOCK_TICK_MS) {

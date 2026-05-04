@@ -5,6 +5,7 @@ Deskbuddy is organized around quick workday checks: time, weather, focus, notes,
 ## Home
 
 Home is the default glance screen. It shows the clock and four configurable widgets.
+The refreshed Home screen prioritizes the workday: large time, current weather, focus timer, next-hour weather, a short note, and a scrolling live ticker for quotes or technology headlines.
 
 Good default widgets:
 
@@ -13,7 +14,7 @@ Good default widgets:
 - Rain for commute or errands
 - Outdoor temperature for quick context
 
-Change widgets from the browser settings page.
+The focus card opens the timer picker. The ticker content is controlled from Setup or the browser settings page.
 
 ## Weather
 
@@ -80,4 +81,3 @@ After Wi-Fi connects, open the device IP address in a browser. The web interface
 - Brightness
 - Live card mode
 - Sleep behavior
-
