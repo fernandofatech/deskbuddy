@@ -116,7 +116,7 @@ String regionFormatKey = "europe"; // europe = 24h + dd.mm.yyyy, us = 12h + mm/d
 // =========================================================
 const int SCREEN_W = 240;
 const int SCREEN_H = 320;
-const int TOPBAR_H = 34;
+const int TOPBAR_H = 18;
 const int NAV_H    = 44;
 
 const int HOME_GRID_Y1 = 120;
@@ -146,6 +146,14 @@ const int PAGE_WIDGET_H = HOME_WIDGET_H;
 String notesText = "No notes yet.";
 bool notesDirty = true;
 String buddyNickname = "";
+const int CHECKLIST_COUNT = 4;
+String checklistItems[CHECKLIST_COUNT] = {
+  "Review today's priority",
+  "Check calendar",
+  "Plan next focus block",
+  "Wrap up notes"
+};
+bool checklistDone[CHECKLIST_COUNT] = {false, false, false, false};
 
 enum HomeWidgetType {
   HOME_WIDGET_WEEK = 0,
@@ -205,6 +213,19 @@ String cacheTimerMenu = "";
 String cacheTimerDone = "";
 String cacheTimerDoneCountdown = "";
 String cacheTimerDoneFlash = "";
+String cacheHomeHero = "";
+String cacheHomeFocus = "";
+String cacheHomeForecast = "";
+String cacheHomeNote = "";
+String cacheHomeTicker = "";
+String cacheHomeShow = "";
+int homeTickerOffset = 0;
+unsigned long lastHomeTickerTick = 0;
+const unsigned long HOME_TICKER_TICK_MS = 160UL;
+int homeShowSlide = 0;
+unsigned long lastHomeShowSlideMs = 0;
+const int HOME_SHOW_SLIDE_COUNT = 5;
+const unsigned long HOME_SHOW_SLIDE_MS = 12000UL;
 
 String lastWifiText = "";
 String lastSignalText = "";
@@ -221,9 +242,33 @@ String lastWindDirText = "";
 String lastNextSunLabel = "";
 String lastNextSunTime = "";
 String lastNotesText = "";
+String lastChecklistText = "";
 String lastNetworkToggleText = "";
 String lastSettingsText = "";
 String lastInsightText = "";
+String lastWeatherPanelText = "";
+String lastNetworkPanelText = "";
+int networkToolPage = 0;
+const int NETWORK_TOOL_PAGE_COUNT = 6;
+int wifiDetailIndex = 0;
+
+struct WifiScanItem {
+  String ssid;
+  String bssid;
+  int32_t rssi;
+  int32_t channel;
+  wifi_auth_mode_t auth;
+  bool hidden;
+};
+
+const int WIFI_SCAN_MAX = 10;
+WifiScanItem wifiScanItems[WIFI_SCAN_MAX];
+int wifiScanCount = 0;
+unsigned long lastWifiScanMs = 0;
+bool wifiScanBusy = false;
+
+String gatewayServiceText = "Tap scan";
+String gatewayServiceHost = "";
 
 const char* homeWidgetKey(HomeWidgetType type) {
   switch (type) {
@@ -349,6 +394,26 @@ const CityPreset CITY_PRESETS[] = {
 const int CITY_PRESET_COUNT = sizeof(CITY_PRESETS) / sizeof(CITY_PRESETS[0]);
 
 // Weather
+const int HOURLY_FORECAST_COUNT = 6;
+const int DAILY_FORECAST_COUNT = 7;
+
+struct HourlyForecast {
+  int minuteOfDay;
+  float tempC;
+  float precipProb;
+  int weatherCode;
+  bool valid;
+};
+
+struct DailyForecast {
+  String label;
+  float minC;
+  float maxC;
+  float precipProb;
+  int weatherCode;
+  bool valid;
+};
+
 static float tempC = NAN;
 static float tempMinC = NAN;
 static float tempMaxC = NAN;
@@ -356,6 +421,9 @@ static float precipMm = NAN;
 static float windSpeedMs = NAN;
 static float windDirectionDeg = NAN;
 static float uvIndex = NAN;
+static int weatherCode = -1;
+HourlyForecast hourlyForecasts[HOURLY_FORECAST_COUNT];
+DailyForecast dailyForecasts[DAILY_FORECAST_COUNT];
 static time_t lastWeatherFetch = 0;
 static const uint32_t WEATHER_INTERVAL_SEC = 10 * 60;
 
@@ -371,12 +439,16 @@ static int lastSunYmd = -1;
 static time_t lastSyncTime = 0;
 
 // Public content
-String contentMode = "quote"; // quote, tech, off
+String contentMode = "mix"; // mix, quote, tech, off
 String insightTitle = "Deskbuddy";
 String insightBody = "Tap Setup to choose quotes, tech headlines, city, Wi-Fi, and brightness.";
 String insightSource = "Local";
+String insightStatus = "Waiting for Wi-Fi";
 static time_t lastInsightFetch = 0;
+static time_t lastInsightAttempt = 0;
+static int insightFailureCount = 0;
 static const uint32_t INSIGHT_INTERVAL_SEC = 60 * 60;
+static const uint32_t INSIGHT_RETRY_SEC = 5 * 60;
 
 // =========================================================
 // SLEEP / BACKLIGHT
@@ -439,6 +511,38 @@ static String ipText() {
   return WiFi.localIP().toString();
 }
 
+static String gatewayText() {
+  if (!wifiEnabled || WiFi.status() != WL_CONNECTED) return "-";
+  return WiFi.gatewayIP().toString();
+}
+
+static String dnsText() {
+  if (!wifiEnabled || WiFi.status() != WL_CONNECTED) return "-";
+  return WiFi.dnsIP().toString();
+}
+
+static String subnetText() {
+  if (!wifiEnabled || WiFi.status() != WL_CONNECTED) return "-";
+  IPAddress ip = WiFi.localIP();
+  IPAddress mask = WiFi.subnetMask();
+  IPAddress net((uint8_t)(ip[0] & mask[0]), (uint8_t)(ip[1] & mask[1]), (uint8_t)(ip[2] & mask[2]), (uint8_t)(ip[3] & mask[3]));
+  return net.toString() + "/" + mask.toString();
+}
+
+static String authModeText(wifi_auth_mode_t auth) {
+  switch (auth) {
+    case WIFI_AUTH_OPEN: return "Open";
+    case WIFI_AUTH_WEP: return "WEP";
+    case WIFI_AUTH_WPA_PSK: return "WPA";
+    case WIFI_AUTH_WPA2_PSK: return "WPA2";
+    case WIFI_AUTH_WPA_WPA2_PSK: return "WPA/WPA2";
+    case WIFI_AUTH_WPA2_ENTERPRISE: return "WPA2-E";
+    case WIFI_AUTH_WPA3_PSK: return "WPA3";
+    case WIFI_AUTH_WPA2_WPA3_PSK: return "WPA2/3";
+    default: return "Sec";
+  }
+}
+
 static bool useUsRegionFormat() {
   return regionFormatKey == "us";
 }
@@ -496,6 +600,16 @@ static String formatDisplayTemp(float value) {
   return String((int)roundf(value)) + "C";
 }
 
+static String formatCompactTemp(float value) {
+  if (isnan(value)) return "--";
+
+  if (unitKey == "imperial") {
+    return String((int)roundf(value * 9.0f / 5.0f + 32.0f));
+  }
+
+  return String((int)roundf(value));
+}
+
 static String tempRangeText() {
   return "H:" + formatDisplayTemp(tempMaxC) + "  L:" + formatDisplayTemp(tempMinC);
 }
@@ -528,6 +642,89 @@ static String windDirectionText() {
   const char* dirs[] = {"N", "NE", "E", "SE", "S", "SW", "W", "NW"};
   int idx = (int)roundf(windDirectionDeg / 45.0f) % 8;
   return String(dirs[idx]) + " " + String((int)roundf(windDirectionDeg)) + "deg";
+}
+
+static String formatHourLabel(int minuteOfDay) {
+  if (minuteOfDay < 0) return "--";
+  int hour = minuteOfDay / 60;
+  if (useUsRegionFormat()) {
+    int hour12 = hour % 12;
+    if (hour12 == 0) hour12 = 12;
+    return String(hour12) + (hour >= 12 ? "p" : "a");
+  }
+
+  char buf[6];
+  snprintf(buf, sizeof(buf), "%02d", hour);
+  return String(buf);
+}
+
+static String weekdayLabelFromDate(const char* isoDate, int index) {
+  if (index == 0) return "Today";
+  if (!isoDate || strlen(isoDate) < 10) return "+" + String(index) + "d";
+
+  struct tm tmDate;
+  memset(&tmDate, 0, sizeof(tmDate));
+  tmDate.tm_year = String(isoDate).substring(0, 4).toInt() - 1900;
+  tmDate.tm_mon = String(isoDate).substring(5, 7).toInt() - 1;
+  tmDate.tm_mday = String(isoDate).substring(8, 10).toInt();
+  tmDate.tm_isdst = -1;
+  mktime(&tmDate);
+
+  char buf[8];
+  strftime(buf, sizeof(buf), "%a", &tmDate);
+  return String(buf);
+}
+
+static String weatherConditionText(int code) {
+  if (code < 0) return "Updating";
+  if (code == 0) return "Clear";
+  if (code <= 3) return "Cloudy";
+  if (code == 45 || code == 48) return "Fog";
+  if ((code >= 51 && code <= 67) || (code >= 80 && code <= 82)) return "Rain";
+  if ((code >= 71 && code <= 77) || (code >= 85 && code <= 86)) return "Snow";
+  if (code >= 95) return "Storm";
+  return "Weather";
+}
+
+static String weatherShortText(int code) {
+  String label = weatherConditionText(code);
+  if (label == "Updating") return "--";
+  return label;
+}
+
+struct DailyReading {
+  const char* ref;
+  const char* text;
+  const char* prompt;
+};
+
+static const DailyReading DAILY_READINGS[] = {
+  {"Psalm 23", "The Lord guides, restores strength, and keeps the path steady.", "Start with one calm step."},
+  {"Psalm 46", "God is a present refuge when the day feels noisy or heavy.", "Pause, breathe, continue."},
+  {"Psalm 91", "Rest under God's care; courage grows when fear gets smaller.", "Choose trust before speed."},
+  {"Psalm 121", "Help comes from the Maker who watches over every ordinary hour.", "Look up before reacting."},
+  {"Proverbs 3", "Wisdom begins with trust, humility, and a straight path.", "Make the next decision clean."},
+  {"Matthew 6", "Today has enough weight; receive grace for this day.", "Do today well."},
+  {"Philippians 4", "Peace guards the heart when prayer replaces anxious loops.", "Turn worry into prayer."},
+  {"Isaiah 40", "Those who wait on the Lord renew strength for the road ahead.", "Renew, then move."},
+  {"Psalm 27", "Light and courage are stronger than fear.", "Stand firm with a quiet heart."},
+  {"James 1", "Ask for wisdom with faith, and walk with patience.", "Choose wisdom over hurry."},
+  {"Romans 12", "Renew the mind and serve with practical love.", "Do useful good today."},
+  {"Psalm 34", "The Lord is near to the brokenhearted and attentive to humble prayer.", "Bring the hard part to God."},
+  {"Colossians 3", "Work with sincerity, gratitude, and a higher purpose.", "Make the work worshipful."},
+  {"John 14", "Do not let the heart be troubled; peace is offered again.", "Receive peace before tasks."}
+};
+
+static int dailyReadingIndex() {
+  time_t now = time(nullptr);
+  if (now < 1600000000) return 0;
+  struct tm tmNow;
+  localtime_r(&now, &tmNow);
+  return tmNow.tm_yday % (sizeof(DAILY_READINGS) / sizeof(DAILY_READINGS[0]));
+}
+
+static DailyReading dailyReading() {
+  return DAILY_READINGS[dailyReadingIndex()];
 }
 
 static String kpText() {
@@ -630,6 +827,9 @@ static String accentPreviewCss(const String& key) {
 }
 
 static String themePreviewCss(const String& key) {
+  if (key == "platinum") return cssColorFrom565(0xD6BA);
+  if (key == "cupertino") return cssColorFrom565(0x0259);
+  if (key == "glass")    return cssColorFrom565(0x2945);
   if (key == "slate")    return cssColorFrom565(0x08A3);
   if (key == "deep")     return cssColorFrom565(0x0000);
   if (key == "nordic")   return cssColorFrom565(0x0864);
@@ -693,6 +893,23 @@ static String timerDoneCountdownText() {
 
 static String homeTitleText() {
   return buddyNickname.length() > 0 ? buddyNickname : "Deskbuddy";
+}
+
+static String homeTickerText() {
+  String source = insightSource.length() > 0 ? insightSource : "Live";
+  String body = insightBody.length() > 0 ? insightBody : "Use Setup to enable quotes or tech headlines.";
+  body.replace("\n", " ");
+  body.trim();
+  return source + "  -  " + body;
+}
+
+static String compactNoteText() {
+  String text = notesText;
+  text.replace("\n", " ");
+  text.trim();
+  if (text.length() == 0) text = "No notes yet.";
+  if (text.length() > 72) text = text.substring(0, 69) + "...";
+  return text;
 }
 
 int sanitizeTimerMinutes(int value) {
@@ -878,8 +1095,14 @@ void applyThemeByKey(const String& accentKey, const String& bgKey) {
     COL_BG = 0x1004; COL_PANEL = 0x1886; COL_PANEL_ALT = 0x20E8; COL_STROKE = 0x41AC;
   } else if (bgKey == "ochre") {
     COL_BG = 0x20E1; COL_PANEL = 0x3184; COL_PANEL_ALT = 0x4226; COL_STROKE = 0x632B;
+  } else if (bgKey == "platinum") {
+    COL_BG = 0xD6BA; COL_PANEL = 0xEF7D; COL_PANEL_ALT = 0xC638; COL_STROKE = 0xA514;
+  } else if (bgKey == "cupertino") {
+    COL_BG = 0x0259; COL_PANEL = 0x0B1D; COL_PANEL_ALT = 0x123E; COL_STROKE = 0x3CDF;
+  } else if (bgKey == "glass") {
+    COL_BG = 0x18E3; COL_PANEL = 0x2945; COL_PANEL_ALT = 0x3186; COL_STROKE = 0x5AEB;
   } else {
-    COL_BG = 0x08A3; COL_PANEL = 0x1106; COL_PANEL_ALT = 0x18C7; COL_STROKE = 0x31EC;
+    COL_BG = 0x1082; COL_PANEL = 0x18C3; COL_PANEL_ALT = 0x2104; COL_STROKE = 0x4208;
   }
 }
 
@@ -920,8 +1143,8 @@ void applyTextColorByKey(const String& key) {
 void loadStoredSettings() {
   prefs.begin("deskbuddy", false);
 
-  String accent = prefs.getString("accent", "cyan");
-  String bg     = prefs.getString("bg", "slate");
+  String accent = prefs.getString("accent", "ice");
+  String bg     = prefs.getString("bg", "graphite");
   String txt    = prefs.getString("text", "standard");
 
   notesText        = prefs.getString("notes", "No notes yet.");
@@ -935,8 +1158,24 @@ void loadStoredSettings() {
   flashModeEnabled = prefs.getBool("flashMode", false);
   wifiEnabled      = prefs.getBool("wifiEnabled", true);
   BL_FULL          = constrain(prefs.getInt("brightness", 255), 30, 255);
-  contentMode      = prefs.getString("contentMode", "quote");
-  if (contentMode != "quote" && contentMode != "tech" && contentMode != "off") contentMode = "quote";
+  contentMode      = prefs.getString("contentMode", "mix");
+  if (contentMode != "mix" && contentMode != "quote" && contentMode != "tech" && contentMode != "off") contentMode = "mix";
+  int liveSchema = prefs.getInt("liveSchema", 0);
+  if (liveSchema < 1 && contentMode != "off") {
+    contentMode = "mix";
+    prefs.putString("contentMode", contentMode);
+    prefs.putInt("liveSchema", 1);
+  }
+
+  for (int i = 0; i < CHECKLIST_COUNT; i++) {
+    String textKey = String("checkText") + String(i);
+    String doneKey = String("checkDone") + String(i);
+    checklistItems[i] = prefs.getString(textKey.c_str(), checklistItems[i]);
+    checklistItems[i].trim();
+    if (checklistItems[i].length() == 0) checklistItems[i] = "Task " + String(i + 1);
+    if (checklistItems[i].length() > 40) checklistItems[i] = checklistItems[i].substring(0, 40);
+    checklistDone[i] = prefs.getBool(doneKey.c_str(), checklistDone[i]);
+  }
 
   for (int i = 0; i < HOME_SLOT_COUNT; i++) {
     String key = String("homeSlot") + String(i);
@@ -957,9 +1196,15 @@ void loadStoredSettings() {
 
 void resetDataCaches() {
   tempC = NAN;
+  tempMinC = NAN;
+  tempMaxC = NAN;
   precipMm = NAN;
   windSpeedMs = NAN;
   windDirectionDeg = NAN;
+  uvIndex = NAN;
+  weatherCode = -1;
+  for (int i = 0; i < HOURLY_FORECAST_COUNT; i++) hourlyForecasts[i].valid = false;
+  for (int i = 0; i < DAILY_FORECAST_COUNT; i++) dailyForecasts[i].valid = false;
   kpIndex = NAN;
   sunriseMin = -1;
   sunsetMin = -1;
@@ -967,6 +1212,7 @@ void resetDataCaches() {
   lastWeatherFetch = 0;
   lastKpFetch = 0;
   lastInsightFetch = 0;
+  lastInsightAttempt = 0;
   dataDirty = true;
   pageDirty = true;
 }
@@ -1104,10 +1350,10 @@ bool fetchWeather() {
 
   String url = String("https://api.open-meteo.com/v1/forecast?latitude=") + String(LAT, 4) +
                "&longitude=" + String(LNG, 4) +
-               "&current=temperature_2m,wind_speed_10m,wind_direction_10m,uv_index" +
-               "&hourly=precipitation" +
-               "&daily=temperature_2m_max,temperature_2m_min" +
-               "&forecast_days=1&timezone=auto&wind_speed_unit=ms";
+               "&current=temperature_2m,wind_speed_10m,wind_direction_10m,uv_index,weather_code" +
+               "&hourly=temperature_2m,precipitation,precipitation_probability,weather_code" +
+               "&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max" +
+               "&forecast_days=7&timezone=auto&wind_speed_unit=ms";
 
   HTTPClient http;
   if (!http.begin(client, url)) return false;
@@ -1121,23 +1367,44 @@ bool fetchWeather() {
   String body = http.getString();
   http.end();
 
-  StaticJsonDocument<4096> doc;
+  DynamicJsonDocument doc(24576);
   if (deserializeJson(doc, body)) return false;
 
   tempC = doc["current"]["temperature_2m"] | NAN;
   windSpeedMs = doc["current"]["wind_speed_10m"] | NAN;
   windDirectionDeg = doc["current"]["wind_direction_10m"] | NAN;
   uvIndex = doc["current"]["uv_index"] | NAN;
+  weatherCode = doc["current"]["weather_code"] | -1;
   tempMaxC = NAN;
   tempMinC = NAN;
 
   JsonArray maxTemps = doc["daily"]["temperature_2m_max"];
   JsonArray minTemps = doc["daily"]["temperature_2m_min"];
+  JsonArray dailyCodes = doc["daily"]["weather_code"];
+  JsonArray dailyRain = doc["daily"]["precipitation_probability_max"];
+  JsonArray dailyTimes = doc["daily"]["time"];
   if (maxTemps && !maxTemps.isNull() && maxTemps.size() > 0) tempMaxC = maxTemps[0] | NAN;
   if (minTemps && !minTemps.isNull() && minTemps.size() > 0) tempMinC = minTemps[0] | NAN;
 
+  for (int i = 0; i < DAILY_FORECAST_COUNT; i++) {
+    dailyForecasts[i].valid = false;
+    if (!dailyTimes || !maxTemps || !minTemps || i >= (int)dailyTimes.size()) continue;
+    const char* dateText = dailyTimes[i];
+    dailyForecasts[i].label = weekdayLabelFromDate(dateText, i);
+    dailyForecasts[i].maxC = maxTemps[i] | NAN;
+    dailyForecasts[i].minC = minTemps[i] | NAN;
+    dailyForecasts[i].precipProb = dailyRain ? (dailyRain[i] | NAN) : NAN;
+    dailyForecasts[i].weatherCode = dailyCodes ? (dailyCodes[i] | -1) : -1;
+    dailyForecasts[i].valid = true;
+  }
+
   JsonArray times = doc["hourly"]["time"];
   JsonArray precs = doc["hourly"]["precipitation"];
+  JsonArray hourlyTemps = doc["hourly"]["temperature_2m"];
+  JsonArray hourlyRain = doc["hourly"]["precipitation_probability"];
+  JsonArray hourlyCodes = doc["hourly"]["weather_code"];
+
+  for (int i = 0; i < HOURLY_FORECAST_COUNT; i++) hourlyForecasts[i].valid = false;
 
   if (times && precs) {
     time_t nowT = time(nullptr);
@@ -1157,6 +1424,20 @@ bool fetchWeather() {
     }
     if (idx < 0) idx = 0;
     precipMm = precs[idx] | NAN;
+
+    for (int i = 0; i < HOURLY_FORECAST_COUNT; i++) {
+      int src = idx + i;
+      if (src >= (int)times.size()) break;
+      const char* hourText = times[src];
+      if (!hourText || strlen(hourText) < 16) continue;
+      int hour = String(hourText).substring(11, 13).toInt();
+      int minute = String(hourText).substring(14, 16).toInt();
+      hourlyForecasts[i].minuteOfDay = hour * 60 + minute;
+      hourlyForecasts[i].tempC = hourlyTemps ? (hourlyTemps[src] | NAN) : NAN;
+      hourlyForecasts[i].precipProb = hourlyRain ? (hourlyRain[src] | NAN) : NAN;
+      hourlyForecasts[i].weatherCode = hourlyCodes ? (hourlyCodes[src] | -1) : -1;
+      hourlyForecasts[i].valid = true;
+    }
   }
 
   lastWeatherFetch = time(nullptr);
@@ -1166,25 +1447,22 @@ bool fetchWeather() {
 
 void ensureWeather() {
   time_t nowT = time(nullptr);
-  if ((isnan(tempC) || isnan(tempMinC) || isnan(tempMaxC) || isnan(precipMm) || isnan(windSpeedMs) || isnan(windDirectionDeg) || isnan(uvIndex) ||
+  if ((isnan(tempC) || isnan(tempMinC) || isnan(tempMaxC) || isnan(precipMm) || isnan(windSpeedMs) || isnan(windDirectionDeg) || isnan(uvIndex) || weatherCode < 0 ||
        (nowT - lastWeatherFetch) > WEATHER_INTERVAL_SEC) &&
       WiFi.status() == WL_CONNECTED) {
     if (fetchWeather()) dataDirty = true;
   }
 }
 
-bool fetchInsight() {
-  if (WiFi.status() != WL_CONNECTED || contentMode == "off") return false;
-
+bool httpGetJson(const String& url, JsonDocument& doc) {
   WiFiClientSecure client;
   client.setInsecure();
 
-  String url = contentMode == "tech"
-    ? "https://hn.algolia.com/api/v1/search_by_date?tags=story&query=technology"
-    : "https://api.quotable.io/random?maxLength=120";
-
   HTTPClient http;
   if (!http.begin(client, url)) return false;
+  http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
+  http.setTimeout(12000);
+  http.addHeader("User-Agent", "Deskbuddy ESP32");
 
   int code = http.GET();
   if (code != 200) {
@@ -1194,30 +1472,109 @@ bool fetchInsight() {
 
   String body = http.getString();
   http.end();
+  return deserializeJson(doc, body) == DeserializationError::Ok;
+}
 
-  DynamicJsonDocument doc(contentMode == "tech" ? 8192 : 2048);
-  if (deserializeJson(doc, body)) return false;
+bool fetchQuoteInsight() {
+  {
+    DynamicJsonDocument doc(3072);
+    if (httpGetJson("https://zenquotes.io/api/random", doc)) {
+      JsonArray arr = doc.as<JsonArray>();
+      if (arr && arr.size() > 0) {
+        const char* quote = arr[0]["q"] | nullptr;
+        const char* author = arr[0]["a"] | "Unknown";
+        if (quote) {
+          insightTitle = String(author);
+          insightBody = String(quote);
+          insightSource = "ZenQuotes";
+          return true;
+        }
+      }
+    }
+  }
 
-  if (contentMode == "tech") {
-    JsonArray hits = doc["hits"];
-    if (!hits || hits.size() == 0) return false;
-    const char* title = hits[0]["title"] | hits[0]["story_title"] | nullptr;
-    if (!title) return false;
-    insightTitle = "Tech pulse";
-    insightBody = String(title);
-    insightSource = "Hacker News";
-  } else {
-    const char* content = doc["content"] | nullptr;
-    const char* author = doc["author"] | "Unknown";
-    if (!content) return false;
-    insightTitle = String(author);
-    insightBody = String(content);
-    insightSource = "Quotable";
+  {
+    DynamicJsonDocument doc(3072);
+    if (httpGetJson("https://api.quotable.io/random?maxLength=140", doc)) {
+      const char* content = doc["content"] | nullptr;
+      const char* author = doc["author"] | "Unknown";
+      if (content) {
+        insightTitle = String(author);
+        insightBody = String(content);
+        insightSource = "Quotable";
+        return true;
+      }
+    }
+  }
+
+  {
+    DynamicJsonDocument doc(3072);
+    if (httpGetJson("https://api.adviceslip.com/advice", doc)) {
+      const char* advice = doc["slip"]["advice"] | nullptr;
+      if (advice) {
+        insightTitle = "Workday prompt";
+        insightBody = String(advice);
+        insightSource = "AdviceSlip";
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
+bool fetchTechInsight() {
+  DynamicJsonDocument doc(8192);
+  if (!httpGetJson("https://hn.algolia.com/api/v1/search_by_date?tags=story&query=technology", doc)) return false;
+
+  JsonArray hits = doc["hits"];
+  if (!hits || hits.size() == 0) return false;
+  const char* title = hits[0]["title"] | hits[0]["story_title"] | nullptr;
+  const char* author = hits[0]["author"] | "HN";
+  if (!title) return false;
+  insightTitle = "Tech pulse";
+  insightBody = String(title);
+  insightSource = String("Hacker News / ") + String(author);
+  return true;
+}
+
+void setLocalInsightFallback() {
+  const char* fallbackQuotes[] = {
+    "Focus on the next useful step.",
+    "Make the important thing easier to start.",
+    "Small improvements compound during a long workday.",
+    "Clear context beats a crowded dashboard."
+  };
+  int idx = (millis() / 1000UL) % 4;
+  insightTitle = "Deskbuddy";
+  insightBody = fallbackQuotes[idx];
+  insightSource = "Local fallback";
+}
+
+bool fetchInsight() {
+  if (WiFi.status() != WL_CONNECTED || contentMode == "off") return false;
+  lastInsightAttempt = time(nullptr);
+  bool fetchTech = contentMode == "tech" || (contentMode == "mix" && ((lastInsightAttempt / INSIGHT_RETRY_SEC) % 2 == 0));
+  insightStatus = fetchTech ? "Fetching tech news..." : "Fetching quote...";
+
+  bool ok = fetchTech ? fetchTechInsight() : fetchQuoteInsight();
+  if (!ok && contentMode == "mix") ok = fetchTech ? fetchQuoteInsight() : fetchTechInsight();
+  if (!ok) {
+    insightFailureCount++;
+    if (insightFailureCount >= 1 || insightBody.length() == 0 || insightSource == "Local") setLocalInsightFallback();
+    insightStatus = "Live fetch failed; retrying";
+    notesDirty = true;
+    pageDirty = true;
+    return false;
   }
 
   if (insightBody.length() > 180) insightBody = insightBody.substring(0, 177) + "...";
   lastInsightFetch = time(nullptr);
   lastSyncTime = lastInsightFetch;
+  insightFailureCount = 0;
+  struct tm tmInsight;
+  localtime_r(&lastInsightFetch, &tmInsight);
+  insightStatus = "Live updated " + formatClockParts(tmInsight, false);
   return true;
 }
 
@@ -1226,15 +1583,27 @@ void ensureInsight() {
     insightTitle = "Live card off";
     insightBody = "Enable quotes or tech headlines from Setup.";
     insightSource = "Local";
+    insightStatus = "Off";
     return;
   }
 
   time_t nowT = time(nullptr);
-  if ((lastInsightFetch == 0 || (nowT - lastInsightFetch) > INSIGHT_INTERVAL_SEC) &&
+  if (WiFi.status() != WL_CONNECTED) {
+    insightTitle = "Waiting for Wi-Fi";
+    insightBody = "Connect Wi-Fi to load quotes and tech news.";
+    insightSource = "Network";
+    insightStatus = "Offline";
+    return;
+  }
+
+  bool due = lastInsightFetch > 0 && (nowT - lastInsightFetch) > INSIGHT_INTERVAL_SEC;
+  bool retryDue = lastInsightFetch == 0 && (lastInsightAttempt == 0 || (nowT - lastInsightAttempt) > INSIGHT_RETRY_SEC);
+  if ((due || retryDue) &&
       WiFi.status() == WL_CONNECTED) {
     if (fetchInsight()) {
       notesDirty = true;
       dataDirty = true;
+      pageDirty = true;
     }
   }
 }
@@ -1286,12 +1655,68 @@ void ensureKpIndex() {
   }
 }
 
+void scanWifiNetworksNow() {
+  if (wifiScanBusy) return;
+  wifiScanBusy = true;
+  wifiScanCount = 0;
+  int found = WiFi.scanNetworks(false, true);
+  if (found > 0) {
+    wifiScanCount = min(found, WIFI_SCAN_MAX);
+    for (int i = 0; i < wifiScanCount; i++) {
+      wifiScanItems[i].ssid = WiFi.SSID(i);
+      wifiScanItems[i].bssid = WiFi.BSSIDstr(i);
+      wifiScanItems[i].rssi = WiFi.RSSI(i);
+      wifiScanItems[i].channel = WiFi.channel(i);
+      wifiScanItems[i].auth = WiFi.encryptionType(i);
+      wifiScanItems[i].hidden = wifiScanItems[i].ssid.length() == 0;
+      if (wifiScanItems[i].hidden) wifiScanItems[i].ssid = "<hidden>";
+    }
+    for (int i = 0; i < wifiScanCount - 1; i++) {
+      for (int j = i + 1; j < wifiScanCount; j++) {
+        if (wifiScanItems[j].rssi > wifiScanItems[i].rssi) {
+          WifiScanItem tmp = wifiScanItems[i];
+          wifiScanItems[i] = wifiScanItems[j];
+          wifiScanItems[j] = tmp;
+        }
+      }
+    }
+  }
+  wifiDetailIndex = constrain(wifiDetailIndex, 0, max(0, wifiScanCount - 1));
+  WiFi.scanDelete();
+  lastWifiScanMs = millis();
+  wifiScanBusy = false;
+  lastNetworkPanelText = "";
+  pageDirty = true;
+}
+
+String detectGatewayServices() {
+  if (!wifiEnabled || WiFi.status() != WL_CONNECTED) return "Offline";
+  IPAddress gw = WiFi.gatewayIP();
+  gatewayServiceHost = gw.toString();
+  const int ports[] = {53, 80, 443, 22};
+  const char* names[] = {"DNS", "HTTP", "HTTPS", "SSH"};
+  String result = "";
+  WiFiClient client;
+  client.setTimeout(120);
+  for (int i = 0; i < 4; i++) {
+    if (client.connect(gw, ports[i], 120)) {
+      if (result.length() > 0) result += " ";
+      result += names[i];
+      result += ":";
+      result += String(ports[i]);
+      client.stop();
+    }
+  }
+  if (result.length() == 0) result = "No common ports";
+  return result;
+}
+
 // =========================================================
 // DRAW HELPERS
 // =========================================================
 void drawCard(int x, int y, int w, int h, bool accent = false) {
-  tft.fillRoundRect(x, y, w, h, 10, COL_PANEL);
-  tft.drawRoundRect(x, y, w, h, 10, accent ? COL_ACCENT : COL_STROKE);
+  tft.fillRoundRect(x, y, w, h, 8, COL_PANEL);
+  tft.drawRoundRect(x, y, w, h, 8, accent ? COL_ACCENT : COL_STROKE);
 }
 
 void drawTopBar(const String& title) {
@@ -1299,25 +1724,10 @@ void drawTopBar(const String& title) {
   tft.drawFastHLine(0, TOPBAR_H - 1, SCREEN_W, COL_STROKE);
 
   tft.setTextDatum(TL_DATUM);
-  tft.setTextColor(COL_TEXT, COL_PANEL_ALT);
-  tft.drawString(title, 10, 9, 2);
-
-  const int bs = 25;
-  const int bx = SCREEN_W - bs - 6;
-  const int by = 4;
-
-  uint16_t bg = (sleepDimmed || sleepOff) ? COL_ACCENT : COL_PANEL;
-  uint16_t fg = (sleepDimmed || sleepOff) ? TFT_BLACK : COL_TEXT;
-
-  tft.fillRoundRect(bx, by, bs, bs, 7, bg);
-  tft.drawRoundRect(bx, by, bs, bs, 7, COL_ACCENT);
-
-  const int cx = bx + 12;
-  const int cy = by + 12;
-
-  tft.drawCircle(cx, cy + 1, 6, fg);
-  tft.drawFastHLine(cx - 4, cy - 5, 9, bg);
-  tft.drawFastVLine(cx, cy - 7, 6, fg);
+  tft.setTextColor(COL_DIM, COL_PANEL_ALT);
+  tft.drawString(title.substring(0, 18), 8, 4, 1);
+  tft.setTextColor(statusColor(), COL_PANEL_ALT);
+  tft.drawRightString(wifiStatusText().c_str(), 232, 4, 1);
 }
 
 void drawNavBar() {
@@ -1326,7 +1736,7 @@ void drawNavBar() {
   tft.drawFastHLine(0, y, SCREEN_W, COL_STROKE);
 
   const int btnW = SCREEN_W / NAV_COUNT;
-  const char* names[NAV_COUNT] = {"Home", "Wx", "Notes", "Status", "Setup"};
+  const char* names[NAV_COUNT] = {"Home", "Wx", "Notes", "Net", "Setup"};
 
   for (int i = 0; i < NAV_COUNT; i++) {
     int bx = i * btnW;
@@ -1374,6 +1784,89 @@ void drawCleanSunIcon(TFT_eSprite& spr, int cx, int cy, uint16_t c) {
 void drawMoonIcon(TFT_eSprite& spr, int cx, int cy, uint16_t c) {
   spr.fillCircle(cx, cy, 6, c);
   spr.fillCircle(cx + 4, cy - 2, 6, COL_PANEL);
+}
+
+void drawWeatherSun(int cx, int cy, int r, uint16_t fg, uint16_t bg) {
+  tft.fillCircle(cx, cy, r, fg);
+  for (int i = 0; i < 8; i++) {
+    float a = i * 0.785398f;
+    int x1 = cx + (int)(cosf(a) * (r + 4));
+    int y1 = cy + (int)(sinf(a) * (r + 4));
+    int x2 = cx + (int)(cosf(a) * (r + 10));
+    int y2 = cy + (int)(sinf(a) * (r + 10));
+    tft.drawLine(x1, y1, x2, y2, fg);
+  }
+  tft.drawCircle(cx, cy, r + 1, bg);
+}
+
+void drawWeatherCloud(int cx, int cy, int scale, uint16_t fg, uint16_t bg) {
+  int r = scale;
+  tft.fillCircle(cx - r, cy + 2, r, fg);
+  tft.fillCircle(cx + 2, cy - 3, r + 3, fg);
+  tft.fillCircle(cx + r + 5, cy + 3, r - 1, fg);
+  tft.fillRoundRect(cx - r * 2, cy + 2, r * 4 + 8, r + 9, 5, fg);
+  tft.drawFastHLine(cx - r * 2, cy + r + 11, r * 4 + 8, bg);
+}
+
+void drawWeatherRain(int cx, int cy, int scale, uint16_t fg) {
+  int len = max(4, scale + 2);
+  for (int i = -1; i <= 1; i++) {
+    int x = cx + i * scale;
+    tft.drawLine(x, cy, x - max(1, scale / 2), cy + len, fg);
+  }
+}
+
+void drawWeatherSnow(int cx, int cy, int scale, uint16_t fg) {
+  int len = max(2, scale / 2);
+  for (int i = -1; i <= 1; i++) {
+    int x = cx + i * scale;
+    tft.drawLine(x - len, cy + len, x + len, cy + len * 2, fg);
+    tft.drawLine(x + len, cy + len, x - len, cy + len * 2, fg);
+  }
+}
+
+void drawWeatherIcon(int cx, int cy, int code, int size, uint16_t bg) {
+  uint16_t sun = COL_YELLOW;
+  uint16_t cloud = COL_TEXT;
+  uint16_t rain = COL_ACCENT;
+  int r = max(2, size / 5);
+  if (code < 0) {
+    tft.drawCircle(cx, cy, r + 6, COL_DIM);
+    tft.drawLine(cx - 5, cy, cx + 5, cy, COL_DIM);
+    return;
+  }
+  if (code == 0) {
+    drawWeatherSun(cx, cy, r + 2, sun, bg);
+    return;
+  }
+  if (code <= 3) {
+    if (code <= 2) drawWeatherSun(cx - r, cy - r, r, sun, bg);
+    drawWeatherCloud(cx + 1, cy + 1, r, cloud, bg);
+    return;
+  }
+  if (code == 45 || code == 48) {
+    drawWeatherCloud(cx, cy - 2, r, cloud, bg);
+    tft.drawFastHLine(cx - size / 2, cy + r + 9, size, COL_DIM);
+    tft.drawFastHLine(cx - size / 3, cy + r + 15, size * 2 / 3, COL_DIM);
+    return;
+  }
+  if ((code >= 51 && code <= 67) || (code >= 80 && code <= 82)) {
+    drawWeatherCloud(cx, cy - 3, r, cloud, bg);
+    drawWeatherRain(cx, cy + r + 9, r + 3, rain);
+    return;
+  }
+  if ((code >= 71 && code <= 77) || (code >= 85 && code <= 86)) {
+    drawWeatherCloud(cx, cy - 3, r, cloud, bg);
+    drawWeatherSnow(cx, cy + r + 7, r + 3, rain);
+    return;
+  }
+  if (code >= 95) {
+    drawWeatherCloud(cx, cy - 5, r, cloud, bg);
+    tft.fillTriangle(cx - 2, cy + r + 5, cx + 8, cy + r + 5, cx, cy + r + 18, COL_YELLOW);
+    tft.fillTriangle(cx, cy + r + 13, cx + 9, cy + r + 13, cx - 2, cy + r + 28, COL_YELLOW);
+    return;
+  }
+  drawWeatherCloud(cx, cy, r, cloud, bg);
 }
 
 int drawWrappedTextLimited(int x, int y, int maxW, const String& text, int font, uint16_t fg, uint16_t bg, int maxLines) {
@@ -1670,6 +2163,313 @@ void drawHomeSlotWidget(int slot, bool force = false) {
   }
 }
 
+void drawHomeHero(bool force = false) {
+  time_t now = time(nullptr);
+  struct tm tmNow;
+  localtime_r(&now, &tmNow);
+
+  String timeBuf = formatClockParts(tmNow, false);
+  String dateBuf = formatDateParts(tmNow);
+  String condition = weatherConditionText(weatherCode);
+  String combined = timeBuf + "|" + dateBuf + "|" + tempText() + "|" + tempRangeText() + "|" +
+                    condition + "|" + locationName + "|" + wifiStatusText() + "|" +
+                    String(COL_PANEL) + "|" + String(COL_TEXT) + "|" + String(COL_ACCENT);
+  if (!force && combined == cacheHomeHero) return;
+  cacheHomeHero = combined;
+
+  drawCard(8, 40, 224, 82, true);
+  tft.fillRect(16, 48, 208, 66, COL_PANEL);
+
+  tft.setTextColor(COL_TEXT, COL_PANEL);
+  if (useUsRegionFormat()) {
+    int splitAt = timeBuf.lastIndexOf(' ');
+    String mainTime = splitAt > 0 ? timeBuf.substring(0, splitAt) : timeBuf;
+    String suffix = splitAt > 0 ? timeBuf.substring(splitAt + 1) : "";
+    tft.drawString(mainTime, 18, 52, 4);
+    if (suffix.length() > 0) tft.drawString(suffix, 84, 59, 2);
+  } else {
+    tft.drawString(timeBuf, 18, 52, 4);
+  }
+
+  tft.setTextColor(COL_DIM, COL_PANEL);
+  tft.drawString(dateBuf, 18, 84, 1);
+  tft.drawString(wifiStatusText(), 18, 101, 1);
+
+  tft.setTextColor(COL_TEXT, COL_PANEL);
+  tft.drawRightString(tempText().c_str(), 222, 52, 4);
+  tft.setTextColor(COL_ACCENT, COL_PANEL);
+  tft.drawRightString(condition.substring(0, 10).c_str(), 222, 84, 1);
+  tft.setTextColor(COL_DIM, COL_PANEL);
+  tft.drawRightString(locationName.substring(0, 12).c_str(), 222, 101, 1);
+}
+
+void drawHomeFocusCard(bool force = false) {
+  String value = formatTimerClock(focusRemainingSec);
+  String hint = focusHintText();
+  String combined = value + "|" + hint + "|" + String(focusTimerRunning ? 1 : 0) + "|" +
+                    String(focusTimerFinished ? 1 : 0) + "|" + String(COL_PANEL);
+  if (!force && combined == cacheHomeFocus) return;
+  cacheHomeFocus = combined;
+
+  drawCard(8, 128, 108, 58, true);
+  tft.fillRect(16, 136, 92, 42, COL_PANEL);
+  tft.setTextColor(COL_DIM, COL_PANEL);
+  tft.drawString("Focus", 18, 137, 1);
+  tft.setTextColor(focusTimerFinished ? COL_GREEN : COL_TEXT, COL_PANEL);
+  tft.drawString(value, 18, 151, 4);
+  tft.setTextColor(COL_ACCENT, COL_PANEL);
+  tft.drawRightString(hint.substring(0, 12).c_str(), 108, 174, 1);
+}
+
+void drawHomeForecastCard(bool force = false) {
+  String nextTemp = hourlyForecasts[1].valid ? formatDisplayTemp(hourlyForecasts[1].tempC) : tempRangeText();
+  String pop = hourlyForecasts[1].valid && !isnan(hourlyForecasts[1].precipProb)
+    ? String((int)roundf(hourlyForecasts[1].precipProb)) + "%"
+    : rainText();
+  String combined = nextTemp + "|" + pop + "|" + windText() + "|" + uvText() + "|" + String(COL_PANEL);
+  if (!force && combined == cacheHomeForecast) return;
+  cacheHomeForecast = combined;
+
+  drawCard(124, 128, 108, 58, true);
+  tft.fillRect(132, 136, 92, 42, COL_PANEL);
+  tft.setTextColor(COL_DIM, COL_PANEL);
+  tft.drawString("Next hour", 134, 137, 1);
+  tft.setTextColor(COL_TEXT, COL_PANEL);
+  tft.drawString(nextTemp, 134, 151, 4);
+  tft.setTextColor(COL_ACCENT, COL_PANEL);
+  tft.drawRightString(("Rain " + pop).c_str(), 224, 174, 1);
+}
+
+void drawHomeTicker(bool force = false) {
+  String ticker = homeTickerText();
+  String combined = ticker + "|" + insightStatus + "|" + String(COL_PANEL) + "|" + String(COL_TEXT) + "|" + String(COL_ACCENT);
+  if (force || combined != cacheHomeTicker) {
+    cacheHomeTicker = combined;
+    homeTickerOffset = 0;
+    drawCard(8, 194, 224, 36, true);
+  }
+
+  sprSmall.setColorDepth(16);
+  sprSmall.createSprite(208, 20);
+  sprSmall.fillSprite(COL_PANEL);
+  sprSmall.setTextDatum(TL_DATUM);
+  sprSmall.setTextColor(COL_ACCENT, COL_PANEL);
+  sprSmall.drawString("Live", 0, 2, 1);
+  sprSmall.setTextColor(COL_TEXT, COL_PANEL);
+
+  int textX = 34 - homeTickerOffset;
+  int textW = sprSmall.textWidth(ticker, 2);
+  sprSmall.drawString(ticker, textX, 1, 2);
+  if (textX + textW < 208) sprSmall.drawString(ticker, textX + textW + 44, 1, 2);
+  sprSmall.pushSprite(16, 202);
+  sprSmall.deleteSprite();
+
+  int loopW = textW + 44;
+  homeTickerOffset = loopW > 0 ? (homeTickerOffset + 4) % loopW : 0;
+}
+
+void drawHomeNoteCard(bool force = false) {
+  String note = compactNoteText();
+  String combined = note + "|" + nextSunLabel() + "|" + nextSunTimeText() + "|" + String(COL_PANEL);
+  if (!force && combined == cacheHomeNote) return;
+  cacheHomeNote = combined;
+
+  drawCard(8, 236, 224, 36, false);
+  tft.fillRect(16, 244, 208, 20, COL_PANEL);
+  tft.setTextColor(COL_DIM, COL_PANEL);
+  tft.drawString("Note", 18, 245, 1);
+  tft.setTextColor(COL_TEXT, COL_PANEL);
+  tft.drawString(note.substring(0, 24), 52, 245, 1);
+  tft.setTextColor(COL_ACCENT, COL_PANEL);
+  tft.drawRightString((nextSunLabel() + " " + nextSunTimeText()).c_str(), 224, 259, 1);
+}
+
+void drawShowDots() {
+  const int y = 262;
+  const int startX = 100;
+  for (int i = 0; i < HOME_SHOW_SLIDE_COUNT; i++) {
+    tft.fillCircle(startX + i * 13, y, 3, i == homeShowSlide ? COL_ACCENT : COL_STROKE);
+  }
+}
+
+void drawShowCardTitle(const String& title, const String& subtitle = "") {
+  tft.setTextDatum(TL_DATUM);
+  tft.setTextColor(COL_DIM, COL_BG);
+  tft.drawString(title, 12, 41, 2);
+  if (subtitle.length() > 0) {
+    tft.setTextColor(COL_ACCENT, COL_BG);
+    tft.drawRightString(subtitle.substring(0, 18).c_str(), 228, 42, 1);
+  }
+}
+
+void drawHomeOverviewSlide() {
+  time_t now = time(nullptr);
+  struct tm tmNow;
+  localtime_r(&now, &tmNow);
+  String timeBuf = formatClockParts(tmNow, false);
+
+  drawShowCardTitle(homeTitleText(), wifiStatusText());
+  drawCard(8, 62, 224, 94, true);
+  tft.fillRect(18, 72, 204, 72, COL_PANEL);
+  tft.setTextColor(COL_TEXT, COL_PANEL);
+  tft.drawString(timeBuf, 20, 76, 4);
+  tft.setTextColor(COL_DIM, COL_PANEL);
+  tft.drawString(formatDateParts(tmNow), 20, 110, 2);
+  tft.setTextColor(COL_TEXT, COL_PANEL);
+  tft.drawRightString(tempText().c_str(), 222, 78, 4);
+  tft.setTextColor(COL_ACCENT, COL_PANEL);
+  tft.drawRightString(weatherConditionText(weatherCode).substring(0, 12).c_str(), 222, 112, 1);
+  tft.setTextColor(COL_DIM, COL_PANEL);
+  tft.drawRightString(locationName.substring(0, 14).c_str(), 222, 130, 1);
+
+  drawCard(8, 166, 108, 76, true);
+  tft.fillRect(18, 176, 88, 54, COL_PANEL);
+  tft.setTextColor(COL_DIM, COL_PANEL);
+  tft.drawString("Focus", 18, 176, 2);
+  tft.setTextColor(focusTimerFinished ? COL_GREEN : COL_TEXT, COL_PANEL);
+  tft.drawString(formatTimerClock(focusRemainingSec), 18, 198, 4);
+  tft.setTextColor(COL_ACCENT, COL_PANEL);
+  tft.drawString(focusHintText().substring(0, 14), 18, 226, 1);
+
+  drawCard(124, 166, 108, 76, true);
+  tft.fillRect(134, 176, 88, 54, COL_PANEL);
+  tft.setTextColor(COL_DIM, COL_PANEL);
+  tft.drawString("Next", 134, 176, 2);
+  String nextTemp = hourlyForecasts[1].valid ? formatDisplayTemp(hourlyForecasts[1].tempC) : tempRangeText();
+  tft.setTextColor(COL_TEXT, COL_PANEL);
+  tft.drawString(nextTemp, 134, 198, 4);
+  tft.setTextColor(COL_ACCENT, COL_PANEL);
+  String pop = hourlyForecasts[1].valid && !isnan(hourlyForecasts[1].precipProb) ? String((int)roundf(hourlyForecasts[1].precipProb)) + "% rain" : rainText();
+  tft.drawString(pop.substring(0, 14), 134, 226, 1);
+}
+
+void drawHomeWeatherSlide() {
+  drawShowCardTitle("Weather", lastSyncText());
+  drawCard(8, 62, 224, 82, true);
+  tft.fillRect(18, 72, 204, 58, COL_PANEL);
+  drawWeatherIcon(184, 97, weatherCode, 48, COL_PANEL);
+  tft.setTextColor(COL_TEXT, COL_PANEL);
+  tft.drawString(tempText(), 20, 74, 4);
+  tft.setTextColor(COL_ACCENT, COL_PANEL);
+  tft.drawString(weatherConditionText(weatherCode).substring(0, 18), 20, 108, 2);
+  tft.setTextColor(COL_DIM, COL_PANEL);
+  tft.drawString(tempRangeText(), 20, 128, 1);
+  tft.drawRightString((windText() + "  " + uvText()).c_str(), 222, 128, 1);
+
+  drawCard(8, 152, 224, 46, true);
+  tft.fillRect(18, 160, 204, 28, COL_PANEL);
+  for (int i = 0; i < 4; i++) {
+    int x = 20 + i * 50;
+    if (!hourlyForecasts[i].valid) continue;
+    tft.setTextColor(COL_DIM, COL_PANEL);
+    tft.drawCentreString(formatHourLabel(hourlyForecasts[i].minuteOfDay).c_str(), x + 18, 160, 1);
+    tft.setTextColor(COL_TEXT, COL_PANEL);
+    tft.drawCentreString(formatCompactTemp(hourlyForecasts[i].tempC).c_str(), x + 18, 174, 2);
+  }
+
+  drawCard(8, 206, 224, 48, false);
+  tft.fillRect(18, 214, 204, 30, COL_PANEL);
+  for (int i = 0; i < 3; i++) {
+    if (!dailyForecasts[i].valid) continue;
+    int x = 18 + i * 68;
+    tft.setTextColor(i == 0 ? COL_TEXT : COL_DIM, COL_PANEL);
+    tft.drawString(dailyForecasts[i].label.substring(0, 5), x, 214, 1);
+    tft.drawString(weatherShortText(dailyForecasts[i].weatherCode).substring(0, 6), x, 222, 1);
+    tft.setTextColor(COL_ACCENT, COL_PANEL);
+    String range = formatCompactTemp(dailyForecasts[i].maxC) + "/" + formatCompactTemp(dailyForecasts[i].minC);
+    tft.drawString(range, x, 236, 1);
+  }
+}
+
+void drawHomeFocusSlide() {
+  drawShowCardTitle("Focus and checklist", "Tap to check");
+  drawCard(8, 62, 224, 70, true);
+  tft.fillRect(18, 72, 204, 48, COL_PANEL);
+  tft.setTextColor(focusTimerFinished ? COL_GREEN : COL_TEXT, COL_PANEL);
+  tft.drawString(formatTimerClock(focusRemainingSec), 20, 76, 4);
+  tft.setTextColor(COL_ACCENT, COL_PANEL);
+  tft.drawRightString(focusHintText().substring(0, 18).c_str(), 222, 102, 2);
+
+  drawCard(8, 142, 224, 112, true);
+  tft.fillRect(18, 152, 204, 90, COL_PANEL);
+  for (int i = 0; i < CHECKLIST_COUNT; i++) {
+    int y = 154 + i * 22;
+    uint16_t boxColor = checklistDone[i] ? COL_ACCENT : COL_STROKE;
+    tft.drawRoundRect(20, y, 14, 14, 3, boxColor);
+    if (checklistDone[i]) {
+      tft.drawLine(23, y + 7, 27, y + 11, COL_ACCENT);
+      tft.drawLine(27, y + 11, 33, y + 3, COL_ACCENT);
+    }
+    tft.setTextColor(checklistDone[i] ? COL_DIM : COL_TEXT, COL_PANEL);
+    tft.drawString(checklistItems[i].substring(0, 29), 42, y - 1, 2);
+  }
+}
+
+void drawHomeLiveSlide() {
+  drawShowCardTitle("Briefing", insightSource.substring(0, 18));
+  drawCard(8, 62, 224, 142, true);
+  tft.fillRect(18, 72, 204, 120, COL_PANEL);
+  tft.setTextColor(COL_ACCENT, COL_PANEL);
+  tft.drawString(insightTitle.substring(0, 26), 20, 76, 2);
+  drawWrappedTextLimited(20, 104, 198, insightBody, 2, COL_TEXT, COL_PANEL, 5);
+
+  drawCard(8, 214, 224, 40, false);
+  tft.fillRect(18, 222, 204, 22, COL_PANEL);
+  tft.setTextColor(COL_DIM, COL_PANEL);
+  tft.drawString("Status", 20, 224, 1);
+  tft.setTextColor(COL_TEXT, COL_PANEL);
+  tft.drawRightString(insightStatus.substring(0, 24).c_str(), 222, 224, 1);
+  tft.setTextColor(COL_ACCENT, COL_PANEL);
+  tft.drawString(compactNoteText().substring(0, 34), 20, 240, 1);
+}
+
+void drawHomeBibleSlide() {
+  DailyReading reading = dailyReading();
+  drawShowCardTitle("Daily reading", reading.ref);
+  drawCard(8, 62, 224, 142, true);
+  tft.fillRect(18, 72, 204, 120, COL_PANEL);
+  tft.setTextColor(COL_ACCENT, COL_PANEL);
+  tft.drawString("Psalm of the day", 20, 76, 2);
+  tft.setTextColor(COL_TEXT, COL_PANEL);
+  tft.drawString(reading.ref, 20, 101, 4);
+  drawWrappedTextLimited(20, 138, 198, String(reading.text), 2, COL_TEXT, COL_PANEL, 4);
+
+  drawCard(8, 214, 224, 40, false);
+  tft.fillRect(18, 222, 204, 22, COL_PANEL);
+  tft.setTextColor(COL_DIM, COL_PANEL);
+  tft.drawString("Pause", 20, 224, 1);
+  tft.setTextColor(COL_ACCENT, COL_PANEL);
+  tft.drawString(String(reading.prompt).substring(0, 34), 20, 240, 1);
+}
+
+void drawHomeShowSlide(bool force = false) {
+  DailyReading reading = dailyReading();
+  String key = String(homeShowSlide) + "|" + tempText() + "|" + weatherConditionText(weatherCode) + "|" +
+               formatTimerClock(focusRemainingSec) + "|" + focusHintText() + "|" + insightTitle + "|" +
+               insightBody + "|" + insightStatus + "|" + compactNoteText() + "|" + reading.ref + "|" + reading.text;
+  for (int i = 0; i < CHECKLIST_COUNT; i++) {
+    key += "|" + String(checklistDone[i] ? 1 : 0) + checklistItems[i];
+  }
+  if (!force && key == cacheHomeShow) return;
+  cacheHomeShow = key;
+  tft.fillRect(0, TOPBAR_H, SCREEN_W, SCREEN_H - TOPBAR_H - NAV_H, COL_BG);
+  switch (homeShowSlide) {
+    case 0: drawHomeOverviewSlide(); break;
+    case 1: drawHomeWeatherSlide(); break;
+    case 2: drawHomeFocusSlide(); break;
+    case 3: drawHomeLiveSlide(); break;
+    case 4: drawHomeBibleSlide(); break;
+  }
+  drawShowDots();
+}
+
+void advanceHomeShowSlide() {
+  homeShowSlide = (homeShowSlide + 1) % HOME_SHOW_SLIDE_COUNT;
+  lastHomeShowSlideMs = millis();
+  cacheHomeShow = "";
+  pageDirty = true;
+}
+
 void drawFocusMenuOverlay(bool force = false) {
   String combined = String(focusTimerRunning ? 1 : 0) + "|" + String(focusTimerFinished ? 1 : 0) +
                     "|" + String(COL_PANEL_ALT) + "|" + String(COL_PANEL) + "|" + String(COL_ACCENT);
@@ -1772,6 +2572,14 @@ void drawHomePageFull() {
   cacheHomeEmpty1 = "";
   cacheHomeEmpty2 = "";
   cacheFocusTimer = "";
+  cacheHomeHero = "";
+  cacheHomeFocus = "";
+  cacheHomeForecast = "";
+  cacheHomeNote = "";
+  cacheHomeTicker = "";
+  cacheHomeShow = "";
+  homeTickerOffset = 0;
+  lastHomeShowSlideMs = millis();
   for (int i = 0; i < HOME_SLOT_COUNT; i++) {
     cacheHomeSlots[i] = "";
   }
@@ -1779,10 +2587,7 @@ void drawHomePageFull() {
   pageDirty = false;
   lastDrawnPage = PAGE_HOME;
 
-  drawClockCardSprite(true);
-  for (int i = 0; i < HOME_SLOT_COUNT; i++) {
-    drawHomeSlotWidget(i, true);
-  }
+  drawHomeShowSlide(true);
   if (focusMenuOpen) drawFocusMenuOverlay(true);
   if (timerDoneDialogOpen) drawTimerDoneOverlay(true);
 }
@@ -1798,10 +2603,7 @@ void updateHomeDynamic() {
     return;
   }
 
-  drawClockCardSprite(false);
-  for (int i = 0; i < HOME_SLOT_COUNT; i++) {
-    drawHomeSlotWidget(i, false);
-  }
+  drawHomeShowSlide(false);
 }
 
 void drawWeatherPageFull() {
@@ -1809,116 +2611,86 @@ void drawWeatherPageFull() {
   drawTopBar("Weather");
   drawNavBar();
 
-  drawCard(8, PAGE_ROW1_Y, 108, PAGE_WIDGET_H, true);
-  drawCard(124, PAGE_ROW1_Y, 108, PAGE_WIDGET_H, true);
-  drawCard(8, PAGE_ROW2_Y, 108, PAGE_WIDGET_H, true);
-  drawCard(124, PAGE_ROW2_Y, 108, PAGE_WIDGET_H, true);
-  drawCard(8, PAGE_ROW3_Y, 108, PAGE_WIDGET_H, true);
-  drawCard(124, PAGE_ROW3_Y, 108, PAGE_WIDGET_H, true);
+  drawCard(8, 40, 224, 78, true);
+  drawCard(8, 124, 224, 64, true);
+  drawCard(8, 194, 224, 78, true);
 
   pageDirty = false;
   lastDrawnPage = PAGE_WEATHER;
 
-  lastTempText = "";
-  lastRainText = "";
-  lastUvText = "";
-  lastUvLevelText = "";
-  lastKpText = "";
-  lastKpLevelText = "";
-  lastWindText = "";
-  lastWindDirText = "";
-  lastNextSunLabel = "";
-  lastNextSunTime = "";
+  lastWeatherPanelText = "";
 }
 
 void updateWeatherDynamic() {
-  String t = tempText();
-  String tr = tempRangeText();
-  String tempCombined = t + "|" + tr;
-  if (tempCombined != lastTempText) {
-    tft.fillRect(18, PAGE_ROW1_Y + 30, 88, 30, COL_PANEL);
-    tft.setTextColor(COL_DIM, COL_PANEL);
-    tft.drawString("Outdoor", 18, PAGE_ROW1_Y + 8, 2);
-    tft.setTextColor(COL_TEXT, COL_PANEL);
-    tft.drawString(t, 18, PAGE_ROW1_Y + 30, 4);
-    tft.setTextColor(COL_ACCENT, COL_PANEL);
-    tft.drawString(tr, 18, PAGE_ROW1_Y + 54, 1);
-    lastTempText = tempCombined;
+  String key = tempText() + "|" + tempRangeText() + "|" + rainText() + "|" + windText() + "|" +
+               uvText() + "|" + String(weatherCode) + "|" + locationName + "|" + lastSyncText();
+  for (int i = 0; i < HOURLY_FORECAST_COUNT; i++) {
+    key += "|" + String(hourlyForecasts[i].valid ? 1 : 0) + ":" +
+           String(hourlyForecasts[i].minuteOfDay) + ":" +
+           String(hourlyForecasts[i].tempC, 1) + ":" +
+           String(hourlyForecasts[i].precipProb, 0) + ":" +
+           String(hourlyForecasts[i].weatherCode);
   }
-
-  String r = rainText();
-  if (r != lastRainText) {
-    tft.fillRect(134, PAGE_ROW1_Y + 30, 88, 24, COL_PANEL);
-    tft.setTextColor(COL_DIM, COL_PANEL);
-    tft.drawString("Rain", 134, PAGE_ROW1_Y + 8, 2);
-    tft.setTextColor(COL_TEXT, COL_PANEL);
-    tft.drawString(r, 134, PAGE_ROW1_Y + 30, 4);
-    lastRainText = r;
+  for (int i = 0; i < DAILY_FORECAST_COUNT; i++) {
+    key += "|" + String(dailyForecasts[i].valid ? 1 : 0) + ":" +
+           dailyForecasts[i].label + ":" +
+           String(dailyForecasts[i].minC, 1) + ":" +
+           String(dailyForecasts[i].maxC, 1) + ":" +
+           String(dailyForecasts[i].precipProb, 0) + ":" +
+           String(dailyForecasts[i].weatherCode);
   }
+  if (!dataDirty && key == lastWeatherPanelText) return;
+  lastWeatherPanelText = key;
 
-  String u = uvText();
-  String ul = uvLevelText();
-  if (u != lastUvText || ul != lastUvLevelText || dataDirty) {
-    tft.fillRect(18, PAGE_ROW2_Y + 30, 88, 30, COL_PANEL);
-    tft.setTextColor(COL_DIM, COL_PANEL);
-    tft.drawString("UV index", 18, PAGE_ROW2_Y + 8, 2);
-    tft.setTextColor(COL_TEXT, COL_PANEL);
-    tft.drawString(u, 18, PAGE_ROW2_Y + 28, 4);
-    tft.setTextColor(COL_ACCENT, COL_PANEL);
-    tft.drawString(ul, 18, PAGE_ROW2_Y + 52, 1);
-    lastUvText = u;
-    lastUvLevelText = ul;
-  }
+  tft.fillRect(12, 44, 216, 70, COL_PANEL);
+  tft.setTextColor(COL_DIM, COL_PANEL);
+  tft.drawString(locationName, 18, 48, 2);
+  drawWeatherIcon(108, 80, weatherCode, 28, COL_PANEL);
+  tft.drawString(weatherConditionText(weatherCode).substring(0, 10), 18, 72, 2);
 
-  String w = windText();
-  String wd = windDirectionText();
-  if (w != lastWindText || wd != lastWindDirText) {
-    tft.fillRect(134, PAGE_ROW2_Y + 30, 88, 30, COL_PANEL);
-    tft.setTextColor(COL_DIM, COL_PANEL);
-    tft.drawString("Wind", 134, PAGE_ROW2_Y + 8, 2);
-    tft.setTextColor(COL_TEXT, COL_PANEL);
-    tft.drawString(w, 134, PAGE_ROW2_Y + 28, 4);
-    tft.setTextColor(COL_ACCENT, COL_PANEL);
-    tft.drawString(wd, 134, PAGE_ROW2_Y + 52, 1);
-    lastWindText = w;
-    lastWindDirText = wd;
-  }
+  tft.setTextColor(COL_TEXT, COL_PANEL);
+  tft.drawString(tempText(), 132, 50, 4);
+  tft.setTextColor(COL_ACCENT, COL_PANEL);
+  tft.drawString(tempRangeText(), 18, 94, 1);
+  tft.setTextColor(COL_DIM, COL_PANEL);
+  tft.drawString(windText() + "  " + uvText(), 118, 94, 1);
 
-  String nl = nextSunLabel();
-  String nt = nextSunTimeText();
-  if (nl != lastNextSunLabel || nt != lastNextSunTime) {
-    tft.fillRect(18, PAGE_ROW3_Y + 24, 88, 30, COL_PANEL);
-    tft.setTextColor(COL_DIM, COL_PANEL);
-    tft.drawString(nl, 18, PAGE_ROW3_Y + 8, 2);
-    tft.setTextColor(COL_TEXT, COL_PANEL);
-    if (useUsRegionFormat()) {
-      int splitAt = nt.lastIndexOf(' ');
-      String sunMain = splitAt > 0 ? nt.substring(0, splitAt) : nt;
-      String sunSuffix = splitAt > 0 ? nt.substring(splitAt + 1) : "";
-      tft.drawString(sunMain, 18, PAGE_ROW3_Y + 26, 4);
-      if (sunSuffix.length() > 0) {
-        int suffixX = 18 + tft.textWidth(sunMain, 4) + 3;
-        tft.drawString(sunSuffix, suffixX, PAGE_ROW3_Y + 31, 2);
-      }
-    } else {
-      tft.drawString(nt, 18, PAGE_ROW3_Y + 26, 4);
+  tft.fillRect(12, 128, 216, 56, COL_PANEL);
+  tft.setTextColor(COL_DIM, COL_PANEL);
+  tft.drawString("Next hours", 18, 130, 1);
+  const int colW = 34;
+  for (int i = 0; i < HOURLY_FORECAST_COUNT; i++) {
+    int x = 18 + i * colW;
+    if (i < HOURLY_FORECAST_COUNT - 1) tft.drawFastVLine(x + colW - 4, 145, 30, COL_STROKE);
+    if (!hourlyForecasts[i].valid) {
+      tft.setTextColor(COL_DIM, COL_PANEL);
+      tft.drawCentreString("--", x + 14, 158, 1);
+      continue;
     }
-    lastNextSunLabel = nl;
-    lastNextSunTime = nt;
+    tft.setTextColor(COL_DIM, COL_PANEL);
+    tft.drawCentreString(formatHourLabel(hourlyForecasts[i].minuteOfDay).c_str(), x + 14, 146, 1);
+    tft.setTextColor(COL_TEXT, COL_PANEL);
+    tft.drawCentreString(formatCompactTemp(hourlyForecasts[i].tempC).c_str(), x + 14, 158, 2);
+    tft.setTextColor(COL_ACCENT, COL_PANEL);
+    String pop = isnan(hourlyForecasts[i].precipProb) ? "--" : String((int)roundf(hourlyForecasts[i].precipProb)) + "%";
+    tft.drawCentreString(pop.c_str(), x + 14, 176, 1);
   }
 
-  String k = kpText();
-  String kl = kpLevelText();
-  if (k != lastKpText || kl != lastKpLevelText || dataDirty) {
-    tft.fillRect(134, PAGE_ROW3_Y + 30, 88, 30, COL_PANEL);
-    tft.setTextColor(COL_DIM, COL_PANEL);
-    tft.drawString("KP index", 134, PAGE_ROW3_Y + 8, 2);
+  tft.fillRect(12, 198, 216, 70, COL_PANEL);
+  tft.setTextColor(COL_DIM, COL_PANEL);
+  tft.drawString("7-day forecast", 18, 199, 1);
+  for (int i = 0; i < DAILY_FORECAST_COUNT; i++) {
+    int y = 211 + i * 8;
+    if (!dailyForecasts[i].valid) continue;
+    tft.setTextColor(i == 0 ? COL_TEXT : COL_DIM, COL_PANEL);
+    tft.drawString(dailyForecasts[i].label.substring(0, 5), 18, y, 1);
+    tft.drawString(weatherShortText(dailyForecasts[i].weatherCode).substring(0, 6), 70, y, 1);
+    String range = formatCompactTemp(dailyForecasts[i].maxC) + "/" + formatCompactTemp(dailyForecasts[i].minC);
     tft.setTextColor(COL_TEXT, COL_PANEL);
-    tft.drawString(k, 134, PAGE_ROW3_Y + 28, 4);
+    tft.drawRightString(range.c_str(), 176, y, 1);
     tft.setTextColor(COL_ACCENT, COL_PANEL);
-    tft.drawString(kl, 134, PAGE_ROW3_Y + 52, 1);
-    lastKpText = k;
-    lastKpLevelText = kl;
+    String rain = isnan(dailyForecasts[i].precipProb) ? "--" : String((int)roundf(dailyForecasts[i].precipProb)) + "%";
+    tft.drawRightString(rain.c_str(), 222, y, 1);
   }
 }
 
@@ -1927,119 +2699,227 @@ void drawNotesPageFull() {
   drawTopBar("Notes");
   drawNavBar();
 
-  drawCard(8, 42, 224, 104, true);
-  drawCard(8, 154, 224, 114, true);
+  drawCard(8, 40, 224, 126, true);
+  drawCard(8, 174, 224, 98, false);
 
   pageDirty = false;
   lastDrawnPage = PAGE_NOTES;
   lastNotesText = "";
+  lastChecklistText = "";
   lastInsightText = "";
 }
 
 void updateNotesDynamic() {
-  String insightKey = insightTitle + "|" + insightBody + "|" + insightSource;
-  if (notesText != lastNotesText || insightKey != lastInsightText || notesDirty) {
-    tft.fillRect(18, 54, 204, 78, COL_PANEL);
-    tft.setTextColor(COL_DIM, COL_PANEL);
-    tft.drawString("Notes", 18, 54, 2);
-    drawWrappedTextLimited(18, 76, 198, notesText, 2, COL_TEXT, COL_PANEL, 4);
+  String insightKey = insightTitle + "|" + insightBody + "|" + insightSource + "|" + insightStatus;
+  String checklistKey = "";
+  for (int i = 0; i < CHECKLIST_COUNT; i++) {
+    checklistKey += String(checklistDone[i] ? 1 : 0) + checklistItems[i] + "|";
+  }
 
-    tft.fillRect(18, 166, 204, 88, COL_PANEL);
-    tft.setTextColor(COL_ACCENT, COL_PANEL);
-    tft.drawString(insightTitle, 18, 166, 2);
-    drawWrappedTextLimited(18, 188, 198, insightBody, 2, COL_TEXT, COL_PANEL, 4);
+  if (checklistKey != lastChecklistText || notesDirty) {
+    tft.fillRect(18, 52, 204, 100, COL_PANEL);
     tft.setTextColor(COL_DIM, COL_PANEL);
-    tft.drawString(insightSource, 18, 246, 1);
+    tft.drawString("Checklist", 18, 52, 2);
+    for (int i = 0; i < CHECKLIST_COUNT; i++) {
+      int y = 76 + i * 18;
+      uint16_t boxColor = checklistDone[i] ? COL_ACCENT : COL_STROKE;
+      tft.drawRoundRect(18, y, 12, 12, 3, boxColor);
+      if (checklistDone[i]) {
+        tft.drawLine(21, y + 6, 24, y + 9, COL_ACCENT);
+        tft.drawLine(24, y + 9, 29, y + 3, COL_ACCENT);
+      }
+      tft.setTextColor(checklistDone[i] ? COL_DIM : COL_TEXT, COL_PANEL);
+      tft.drawString(checklistItems[i].substring(0, 28), 36, y - 1, 1);
+    }
+    lastChecklistText = checklistKey;
+  }
+
+  if (notesText != lastNotesText || insightKey != lastInsightText || notesDirty) {
+    tft.fillRect(18, 186, 204, 72, COL_PANEL);
+    tft.setTextColor(COL_DIM, COL_PANEL);
+    tft.drawString("Live", 18, 186, 1);
+    tft.setTextColor(COL_ACCENT, COL_PANEL);
+    tft.drawString(insightTitle.substring(0, 24), 18, 200, 2);
+    drawWrappedTextLimited(18, 222, 198, insightBody, 1, COL_TEXT, COL_PANEL, 2);
+    tft.setTextColor(COL_DIM, COL_PANEL);
+    tft.drawString(insightSource.substring(0, 18), 18, 256, 1);
+    tft.drawRightString(insightStatus.substring(0, 20).c_str(), 222, 256, 1);
 
     lastNotesText = notesText;
     lastInsightText = insightKey;
-    notesDirty = false;
   }
+  notesDirty = false;
 }
 
 void drawStatusPageFull() {
   tft.fillScreen(COL_BG);
-  drawTopBar("Status");
+  drawTopBar("Network");
   drawNavBar();
 
-  drawCard(8, PAGE_ROW1_Y, 108, PAGE_WIDGET_H, true);
-  drawCard(124, PAGE_ROW1_Y, 108, PAGE_WIDGET_H, true);
-  drawCard(8, PAGE_ROW2_Y, 224, PAGE_WIDGET_H, true);
-  drawCard(8, PAGE_ROW3_Y, 108, PAGE_WIDGET_H, true);
-  drawCard(124, PAGE_ROW3_Y, 108, PAGE_WIDGET_H, true);
+  drawCard(8, 24, 224, 244, true);
 
   pageDirty = false;
   lastDrawnPage = PAGE_STATUS;
 
-  lastWifiText = "";
-  lastSignalText = "";
-  lastIpText = "";
-  lastUptimeText = "";
-  lastNetworkToggleText = "";
+  lastNetworkPanelText = "";
+}
+
+void drawNetworkDots() {
+  int startX = 96;
+  for (int i = 0; i < NETWORK_TOOL_PAGE_COUNT; i++) {
+    tft.fillCircle(startX + i * 16, 254, 3, i == networkToolPage ? COL_ACCENT : COL_STROKE);
+  }
+}
+
+void drawNetworkActionButton(const String& label) {
+  tft.fillRoundRect(56, 222, 128, 30, 10, COL_ACCENT);
+  tft.drawRoundRect(56, 222, 128, 30, 10, COL_ACCENT);
+  tft.setTextColor(TFT_BLACK, COL_ACCENT);
+  tft.drawCentreString(label.c_str(), 120, 229, 2);
+}
+
+void drawNetworkHeader(const String& title, const String& action) {
+  tft.fillRect(18, 32, 204, 28, COL_PANEL);
+  tft.setTextColor(COL_ACCENT, COL_PANEL);
+  tft.drawString(title, 18, 33, 2);
+  tft.setTextColor(COL_DIM, COL_PANEL);
+  tft.drawRightString(action.c_str(), 222, 35, 1);
+}
+
+int channelLoad(int channel) {
+  int load = 0;
+  for (int i = 0; i < wifiScanCount; i++) {
+    if (wifiScanItems[i].channel == channel) {
+      int strength = constrain(100 + wifiScanItems[i].rssi, 5, 70);
+      load += strength;
+    }
+  }
+  return constrain(load, 0, 120);
 }
 
 void updateStatusDynamic() {
-  String w = wifiStatusText();
-  if (w != lastWifiText) {
-    tft.fillRect(18, PAGE_ROW1_Y + 24, 88, 30, COL_PANEL);
-    tft.setTextColor(COL_DIM, COL_PANEL);
-    tft.drawString("WiFi", 18, PAGE_ROW1_Y + 8, 2);
+  String key = String(networkToolPage) + "|" + wifiStatusText() + "|" + signalText() + "|" + ipText() + "|" + gatewayText() + "|" +
+               dnsText() + "|" + gatewayServiceText + "|" + String(wifiScanCount) + "|" + String(wifiEnabled ? 1 : 0);
+  for (int i = 0; i < wifiScanCount; i++) {
+    key += "|" + wifiScanItems[i].ssid + ":" + wifiScanItems[i].bssid + ":" + String(wifiScanItems[i].rssi) + ":" + String(wifiScanItems[i].channel);
+  }
+  if (key == lastNetworkPanelText) return;
+  lastNetworkPanelText = key;
+
+  tft.fillRect(18, 32, 204, 220, COL_PANEL);
+
+  if (networkToolPage == 0) {
+    drawNetworkHeader("Network Console", "Tap right");
     tft.setTextColor(statusColor(), COL_PANEL);
-    tft.drawString(w, 18, PAGE_ROW1_Y + 32, 2);
-    lastWifiText = w;
-  }
-
-  String s = signalText();
-  if (s != lastSignalText) {
-    tft.fillRect(134, PAGE_ROW1_Y + 30, 88, 24, COL_PANEL);
+    tft.drawString(wifiStatusText(), 18, 70, 4);
     tft.setTextColor(COL_DIM, COL_PANEL);
-    tft.drawString("Signal", 134, PAGE_ROW1_Y + 8, 2);
+    tft.drawString(WiFi.status() == WL_CONNECTED ? WiFi.SSID().substring(0, 25) : "Open Setup > WiFi to connect", 18, 105, 2);
     tft.setTextColor(COL_TEXT, COL_PANEL);
-    tft.drawString(s, 134, PAGE_ROW1_Y + 30, 4);
-    lastSignalText = s;
-  }
-
-  String ip = ipText();
-  if (ip != lastIpText) {
-    tft.fillRect(18, PAGE_ROW2_Y + 30, 200, 18, COL_PANEL);
+    tft.drawString("IP  " + ipText(), 18, 136, 2);
+    tft.drawString("GW  " + gatewayText(), 18, 162, 2);
+    tft.drawString("DNS " + dnsText(), 18, 188, 2);
+    drawNetworkActionButton("Next tool");
+  } else if (networkToolPage == 1) {
+    drawNetworkHeader("WiFi Scanner", "Tap scan");
     tft.setTextColor(COL_DIM, COL_PANEL);
-    tft.drawString("IP address", 18, PAGE_ROW2_Y + 8, 2);
+    tft.drawString("2.4 GHz SSID / RSSI / CH / SEC", 18, 65, 1);
+    if (wifiScanCount == 0) {
+      tft.setTextColor(COL_TEXT, COL_PANEL);
+      tft.drawString("Tap center to scan", 18, 104, 2);
+    } else {
+      for (int i = 0; i < min(wifiScanCount, 6); i++) {
+        int y = 78 + i * 23;
+        uint16_t rowColor = wifiScanItems[i].rssi > -60 ? COL_GREEN : (wifiScanItems[i].rssi > -75 ? COL_YELLOW : COL_DIM);
+        tft.setTextColor(rowColor, COL_PANEL);
+        tft.drawString(String(wifiScanItems[i].rssi) + "dBm", 18, y, 1);
+        tft.setTextColor(COL_TEXT, COL_PANEL);
+        tft.drawString(wifiScanItems[i].ssid.substring(0, 23), 18, y + 12, 1);
+        tft.setTextColor(COL_DIM, COL_PANEL);
+        String meta = "ch" + String(wifiScanItems[i].channel) + " " + authModeText(wifiScanItems[i].auth);
+        tft.drawRightString(meta.c_str(), 222, y, 1);
+      }
+    }
+    drawNetworkActionButton("Scan WiFi");
+  } else if (networkToolPage == 2) {
+    drawNetworkHeader("Network Detail", "Tap next");
+    if (wifiScanCount == 0) {
+      tft.setTextColor(COL_TEXT, COL_PANEL);
+      tft.drawString("Run WiFi Scanner first", 18, 86, 2);
+    } else {
+      wifiDetailIndex = constrain(wifiDetailIndex, 0, wifiScanCount - 1);
+      WifiScanItem item = wifiScanItems[wifiDetailIndex];
+      tft.setTextColor(COL_DIM, COL_PANEL);
+      tft.drawString("SSID", 18, 68, 1);
+      tft.setTextColor(COL_TEXT, COL_PANEL);
+      tft.drawString(item.ssid.substring(0, 25), 18, 84, 2);
+      tft.setTextColor(COL_DIM, COL_PANEL);
+      tft.drawString("BSSID", 18, 114, 1);
+      tft.setTextColor(COL_TEXT, COL_PANEL);
+      tft.drawString(item.bssid, 18, 130, 2);
+      tft.setTextColor(COL_DIM, COL_PANEL);
+      tft.drawString("Signal", 18, 162, 1);
+      tft.drawString("Channel", 104, 162, 1);
+      tft.drawString("Security", 168, 162, 1);
+      tft.setTextColor(item.rssi > -60 ? COL_GREEN : (item.rssi > -75 ? COL_YELLOW : COL_DIM), COL_PANEL);
+      tft.drawString(String(item.rssi) + "dBm", 18, 180, 2);
+      tft.setTextColor(COL_TEXT, COL_PANEL);
+      tft.drawString(String(item.channel), 110, 180, 2);
+      tft.drawRightString(authModeText(item.auth).c_str(), 222, 180, 2);
+      tft.setTextColor(COL_ACCENT, COL_PANEL);
+      tft.drawString("Item " + String(wifiDetailIndex + 1) + "/" + String(wifiScanCount), 18, 210, 2);
+    }
+    drawNetworkActionButton("Next AP");
+  } else if (networkToolPage == 3) {
+    drawNetworkHeader("Channel Map", "Tap scan");
+    tft.setTextColor(COL_DIM, COL_PANEL);
+    tft.drawString("2.4 GHz channel congestion", 18, 65, 1);
+    for (int ch = 1; ch <= 13; ch++) {
+      int x = 20 + (ch - 1) * 15;
+      int load = channelLoad(ch);
+      int h = map(load, 0, 120, 4, 118);
+      uint16_t barColor = load > 80 ? COL_RED : (load > 45 ? COL_YELLOW : COL_ACCENT);
+      tft.drawFastVLine(x + 6, 198 - h, h, barColor);
+      tft.drawFastVLine(x + 7, 198 - h, h, barColor);
+      tft.setTextColor(COL_DIM, COL_PANEL);
+      if (ch == 1 || ch == 6 || ch == 11) tft.drawCentreString(String(ch).c_str(), x + 6, 208, 1);
+    }
     tft.setTextColor(COL_TEXT, COL_PANEL);
-    tft.drawString(ip, 18, PAGE_ROW2_Y + 30, 2);
-    lastIpText = ip;
-  }
-
-  String up = uptimeText();
-  String upCombined = up + "|" + lastSyncText();
-  if (upCombined != lastUptimeText) {
-    tft.fillRect(18, PAGE_ROW3_Y + 26, 88, 26, COL_PANEL);
+    tft.drawString("APs " + String(wifiScanCount), 18, 214, 2);
+    drawNetworkActionButton("Scan WiFi");
+  } else if (networkToolPage == 4) {
+    drawNetworkHeader("Gateway Tools", "Tap check");
     tft.setTextColor(COL_DIM, COL_PANEL);
-    tft.drawString("Uptime", 18, PAGE_ROW3_Y + 10, 2);
+    tft.drawString("Host", 18, 70, 1);
     tft.setTextColor(COL_TEXT, COL_PANEL);
-    tft.drawString(up, 18, PAGE_ROW3_Y + 26, 2);
+    tft.drawString(gatewayText(), 18, 88, 4);
     tft.setTextColor(COL_DIM, COL_PANEL);
-    tft.drawString(lastSyncText(), 18, PAGE_ROW3_Y + 42, 1);
-    lastUptimeText = upCombined;
+    tft.drawString("Common services", 18, 132, 1);
+    drawWrappedTextLimited(18, 152, 198, gatewayServiceText, 2, COL_ACCENT, COL_PANEL, 3);
+    tft.setTextColor(COL_DIM, COL_PANEL);
+    tft.drawString("Checks only your gateway.", 18, 210, 1);
+    drawNetworkActionButton("Check ports");
+  } else {
+    drawNetworkHeader("Device Info", "Local");
+    tft.setTextColor(COL_DIM, COL_PANEL);
+    tft.drawString("MAC", 18, 70, 1);
+    tft.setTextColor(COL_TEXT, COL_PANEL);
+    tft.drawString(WiFi.macAddress(), 18, 86, 2);
+    tft.setTextColor(COL_DIM, COL_PANEL);
+    tft.drawString("Subnet", 18, 116, 1);
+    tft.setTextColor(COL_TEXT, COL_PANEL);
+    tft.drawString(subnetText().substring(0, 26), 18, 132, 2);
+    tft.setTextColor(COL_DIM, COL_PANEL);
+    tft.drawString("Uptime", 18, 164, 1);
+    tft.setTextColor(COL_TEXT, COL_PANEL);
+    tft.drawString(uptimeText(), 18, 180, 4);
+    drawNetworkActionButton("Next tool");
   }
 
-  String networkLabel = wifiEnabled ? "Enabled" : "Disabled";
-  if (networkLabel != lastNetworkToggleText) {
-    uint16_t btnBg = wifiEnabled ? COL_ACCENT : COL_PANEL_ALT;
-    uint16_t btnFg = wifiEnabled ? TFT_BLACK : COL_TEXT;
-    uint16_t btnStroke = wifiEnabled ? COL_ACCENT : COL_STROKE;
-
-    tft.fillRect(132, PAGE_ROW3_Y + 8, 92, 42, COL_PANEL);
-    tft.setTextColor(COL_DIM, COL_PANEL);
-    tft.drawString("Network", 134, PAGE_ROW3_Y + 10, 2);
-    tft.fillRoundRect(134, PAGE_ROW3_Y + 30, 88, 22, 8, btnBg);
-    tft.drawRoundRect(134, PAGE_ROW3_Y + 30, 88, 22, 8, btnStroke);
-    tft.setTextColor(btnFg, btnBg);
-    tft.drawCentreString(networkLabel.c_str(), 178, PAGE_ROW3_Y + 32, 2);
-    lastNetworkToggleText = networkLabel;
-  }
+  drawNetworkDots();
 }
 
 String contentModeLabel() {
+  if (contentMode == "mix") return "Mix";
   if (contentMode == "tech") return "Tech";
   if (contentMode == "off") return "Off";
   return "Quote";
@@ -2069,11 +2949,14 @@ void applyCityPreset(int direction) {
 }
 
 void cycleContentMode() {
-  if (contentMode == "quote") contentMode = "tech";
+  if (contentMode == "mix") contentMode = "quote";
+  else if (contentMode == "quote") contentMode = "tech";
   else if (contentMode == "tech") contentMode = "off";
-  else contentMode = "quote";
+  else contentMode = "mix";
   prefs.putString("contentMode", contentMode);
   lastInsightFetch = 0;
+  lastInsightAttempt = 0;
+  insightFailureCount = 0;
   lastInsightText = "";
   notesDirty = true;
   pageDirty = true;
@@ -2104,7 +2987,7 @@ void drawSettingsPageFull() {
 }
 
 void updateSettingsDynamic() {
-  String key = String(BL_FULL) + "|" + locationName + "|" + contentMode + "|" + wifiStatusText();
+  String key = String(BL_FULL) + "|" + locationName + "|" + contentMode + "|" + wifiStatusText() + "|" + insightStatus;
   if (key == lastSettingsText) return;
 
   tft.fillRect(18, PAGE_ROW1_Y + 8, 204, 54, COL_PANEL);
@@ -2124,6 +3007,8 @@ void updateSettingsDynamic() {
   tft.drawString("Live card", 18, PAGE_ROW3_Y + 8, 2);
   tft.setTextColor(COL_TEXT, COL_PANEL);
   tft.drawString(contentModeLabel(), 18, PAGE_ROW3_Y + 34, 2);
+  tft.setTextColor(COL_DIM, COL_PANEL);
+  tft.drawString(insightStatus.substring(0, 12), 18, PAGE_ROW3_Y + 52, 1);
 
   tft.fillRect(134, PAGE_ROW3_Y + 8, 88, 54, COL_PANEL);
   tft.setTextColor(COL_DIM, COL_PANEL);
@@ -2223,24 +3108,44 @@ bool handleHomeTouch(int x, int y) {
 
   if (focusMenuOpen) return handleFocusMenuTouch(x, y);
 
-  for (int slot = 0; slot < HOME_SLOT_COUNT; slot++) {
-    if (homeWidgetSlots[slot] != HOME_WIDGET_TIMER) continue;
+  if ((homeShowSlide == 0 && x >= 8 && x < 116 && y >= 166 && y < 242) ||
+      (homeShowSlide == 2 && x >= 8 && x < 232 && y >= 62 && y < 132)) {
+    if (focusTimerFinished) {
+      resetFocusTimer();
+    } else {
+      focusMenuOpen = true;
+      cacheHomeShow = "";
+      cacheTimerMenu = "";
+    }
+    pageDirty = true;
+    return true;
+  }
 
-    int slotX, slotY, slotW, slotH;
-    getHomeSlotRect(slot, slotX, slotY, slotW, slotH);
-
-    if (x >= slotX && x < slotX + slotW && y >= slotY && y < slotY + slotH) {
-      if (focusTimerFinished) {
-        resetFocusTimer();
-      } else {
-        focusMenuOpen = true;
-        cacheFocusTimer = "";
-        clearHomeSlotCaches();
-        cacheTimerMenu = "";
+  if (homeShowSlide == 2) {
+    for (int i = 0; i < CHECKLIST_COUNT; i++) {
+      int rowY = 150 + i * 22;
+      if (x >= 8 && x < 232 && y >= rowY && y < rowY + 22) {
+        checklistDone[i] = !checklistDone[i];
+        String doneKey = String("checkDone") + String(i);
+        prefs.putBool(doneKey.c_str(), checklistDone[i]);
+        cacheHomeShow = "";
+        notesDirty = true;
+        pageDirty = true;
+        return true;
       }
+    }
+  }
+
+  if (y >= TOPBAR_H && y < SCREEN_H - NAV_H) {
+    if (x < SCREEN_W / 3) {
+      homeShowSlide = (homeShowSlide + HOME_SHOW_SLIDE_COUNT - 1) % HOME_SHOW_SLIDE_COUNT;
+      lastHomeShowSlideMs = millis();
+      cacheHomeShow = "";
       pageDirty = true;
       return true;
     }
+    advanceHomeShowSlide();
+    return true;
   }
 
   return false;
@@ -2257,9 +3162,42 @@ bool handleTimerDoneDialogTouch(int x, int y) {
 bool handleStatusTouch(int x, int y) {
   if (currentPage != PAGE_STATUS) return false;
 
-  if (x >= 124 && x < 232 && y >= 198 && y < 268) {
-    setWifiEnabled(!wifiEnabled);
+  if (y >= TOPBAR_H && y < SCREEN_H - NAV_H) {
+    if (x < 56) {
+      networkToolPage = (networkToolPage + NETWORK_TOOL_PAGE_COUNT - 1) % NETWORK_TOOL_PAGE_COUNT;
+    } else if (x > 184) {
+      networkToolPage = (networkToolPage + 1) % NETWORK_TOOL_PAGE_COUNT;
+    } else if (y >= 212 && y < 264 && (networkToolPage == 1 || networkToolPage == 3)) {
+      scanWifiNetworksNow();
+    } else if (y >= 212 && y < 264 && networkToolPage == 2) {
+      if (wifiScanCount > 0) wifiDetailIndex = (wifiDetailIndex + 1) % wifiScanCount;
+    } else if (y >= 212 && y < 264 && networkToolPage == 4) {
+      gatewayServiceText = detectGatewayServices();
+    } else {
+      networkToolPage = (networkToolPage + 1) % NETWORK_TOOL_PAGE_COUNT;
+    }
+    lastNetworkPanelText = "";
+    pageDirty = true;
     return true;
+  }
+
+  return false;
+}
+
+bool handleNotesTouch(int x, int y) {
+  if (currentPage != PAGE_NOTES) return false;
+
+  for (int i = 0; i < CHECKLIST_COUNT; i++) {
+    int rowY = 72 + i * 18;
+    if (x >= 8 && x < 232 && y >= rowY && y < rowY + 18) {
+      checklistDone[i] = !checklistDone[i];
+      String doneKey = String("checkDone") + String(i);
+      prefs.putBool(doneKey.c_str(), checklistDone[i]);
+      lastChecklistText = "";
+      notesDirty = true;
+      pageDirty = true;
+      return true;
+    }
   }
 
   return false;
@@ -2308,6 +3246,8 @@ void handleNavTouch(int x, int y) {
   if (newPage != currentPage) {
     currentPage = newPage;
     pageDirty = true;
+  } else {
+    pageDirty = true;
   }
 }
 
@@ -2315,22 +3255,23 @@ void handleNavTouch(int x, int y) {
 // WEB SERVER
 // =========================================================
 void handleRoot() {
-  String accent = prefs.getString("accent", "cyan");
-  String bg     = prefs.getString("bg", "slate");
+  String accent = prefs.getString("accent", "ice");
+  String bg     = prefs.getString("bg", "graphite");
   String txt    = prefs.getString("text", "standard");
   String units  = prefs.getString("units", "metric");
   String region = prefs.getString("region", "europe");
-  String nickname = prefs.getString("nickname", "");
   bool flashMode = prefs.getBool("flashMode", false);
   int brightness = prefs.getInt("brightness", BL_FULL);
   String liveMode = prefs.getString("contentMode", contentMode);
+  if (liveMode != "mix" && liveMode != "quote" && liveMode != "tech" && liveMode != "off") liveMode = "mix";
   String homeSlotKeys[HOME_SLOT_COUNT];
   for (int i = 0; i < HOME_SLOT_COUNT; i++) {
     homeSlotKeys[i] = prefs.getString((String("homeSlot") + String(i)).c_str(), homeWidgetKey(homeWidgetSlots[i]));
   }
+  DailyReading reading = dailyReading();
 
   String page;
-  page.reserve(21000);
+  page.reserve(30000);
 
   page += "<!doctype html><html><head>";
   page += "<meta charset='utf-8'>";
@@ -2338,15 +3279,23 @@ void handleRoot() {
   page += "<title>Deskbuddy</title>";
   page += "<style>";
   page += ":root{color-scheme:dark;}";
-  page += "body{margin:0;background:linear-gradient(180deg,#0b1018 0%,#111827 100%);color:#edf2f7;font-family:system-ui,sans-serif;}";
+  page += "body{margin:0;background:#0b0d10;color:#f5f5f7;font-family:-apple-system,BlinkMacSystemFont,'SF Pro Display','Segoe UI',system-ui,sans-serif;}";
   page += ".wrap{max-width:980px;margin:0 auto;padding:28px 16px 36px;}";
-  page += ".hero{margin-bottom:18px;padding:18px 20px;border:1px solid #243244;border-radius:20px;background:linear-gradient(135deg,#111927 0%,#172235 100%);box-shadow:0 10px 30px rgba(0,0,0,.22);}";
-  page += ".hero h1{font-size:30px;margin:0 0 8px 0;}";
-  page += ".hero p{margin:0;color:#a9b7c9;font-size:14px;}";
-  page += ".ip{display:inline-block;margin-top:14px;padding:8px 12px;border-radius:999px;background:#0b1220;border:1px solid #334155;color:#dbe7f5;font-size:13px;}";
+  page += ".hero{margin-bottom:16px;padding:22px;border:1px solid #2c2f36;border-radius:22px;background:linear-gradient(145deg,#181b20 0%,#101215 100%);box-shadow:0 18px 60px rgba(0,0,0,.32);}";
+  page += ".hero h1{font-size:34px;margin:0 0 8px 0;letter-spacing:0;}";
+  page += ".hero p{margin:0;color:#b8bec7;font-size:14px;line-height:1.5;}";
+  page += ".ip{display:inline-block;margin-top:14px;padding:8px 12px;border-radius:999px;background:#1c1f24;border:1px solid #3a4049;color:#edf2f7;font-size:13px;}";
+  page += ".summary{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:16px;}";
+  page += ".summary-card{border:1px solid #2c2f36;border-radius:18px;background:#15181d;padding:14px;min-height:74px;}";
+  page += ".summary-card span{display:block;color:#9aa3ad;font-size:12px;margin-bottom:8px;}";
+  page += ".summary-card strong{display:block;color:#f5f5f7;font-size:16px;line-height:1.25;}";
+  page += ".reading-card{grid-column:1 / -1;border:1px solid #334155;border-radius:16px;background:linear-gradient(145deg,#101820,#15181d);padding:14px;}";
+  page += ".reading-card span{display:block;color:#8ea3ba;font-size:12px;font-weight:700;margin-bottom:8px;}";
+  page += ".reading-card strong{display:block;color:#f5f5f7;font-size:18px;margin-bottom:8px;}";
+  page += ".reading-card p{margin:0;color:#b8c4d4;font-size:13px;line-height:1.45;}";
   page += ".layout{display:grid;grid-template-columns:1.15fr .85fr;gap:16px;align-items:start;}";
   page += ".stack{display:grid;gap:16px;}";
-  page += ".panel{background:#171b22;border:1px solid #2d3748;border-radius:18px;padding:18px;margin:0;}";
+  page += ".panel{background:#15181d;border:1px solid #2c2f36;border-radius:18px;padding:18px;margin:0;}";
   page += ".panel-toggle{width:100%;display:flex;align-items:center;justify-content:space-between;gap:12px;background:none;border:none;color:#edf2f7;padding:0;margin:0;cursor:pointer;text-align:left;}";
   page += ".panel-toggle:hover{color:#ffffff;}";
   page += ".panel-toggle h2{flex:1;}";
@@ -2359,9 +3308,9 @@ void handleRoot() {
   page += ".grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;}";
   page += ".grid-3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;}";
   page += ".label{display:block;font-size:13px;margin:0 0 8px 0;color:#a0aec0;font-weight:600;}";
-  page += "textarea,input,select{width:100%;border-radius:12px;border:1px solid #334155;background:#0b1220;color:#edf2f7;padding:12px;box-sizing:border-box;font:inherit;}";
+  page += "textarea,input,select{width:100%;border-radius:12px;border:1px solid #343a42;background:#0f1115;color:#f5f5f7;padding:12px;box-sizing:border-box;font:inherit;}";
   page += "textarea{min-height:170px;resize:vertical;}";
-  page += "button{margin-top:18px;background:#38bdf8;border:none;color:#001018;padding:13px 18px;border-radius:12px;font-weight:800;cursor:pointer;font:inherit;}";
+  page += "button{margin-top:18px;background:#f5f5f7;border:none;color:#0b0d10;padding:13px 18px;border-radius:999px;font-weight:800;cursor:pointer;font:inherit;}";
   page += ".muted{font-size:13px;color:#94a3b8;line-height:1.45;}";
   page += ".footer-note{margin-top:10px;font-size:12px;color:#7f92a8;}";
   page += ".settings-block{margin-top:18px;padding-top:16px;border-top:1px solid #2b3545;}";
@@ -2384,7 +3333,7 @@ void handleRoot() {
   page += ".timer-slot-input{display:flex;align-items:center;gap:8px;}";
   page += ".timer-slot input{padding:10px 12px;text-align:center;font-weight:700;}";
   page += ".timer-unit{font-size:12px;color:#8ea3ba;white-space:nowrap;}";
-  page += "@media(max-width:820px){.layout{grid-template-columns:1fr;}.grid,.grid-3,.timer-slot-grid{grid-template-columns:1fr;}.color-row{grid-template-columns:1fr;}}";
+  page += "@media(max-width:820px){.layout,.summary{grid-template-columns:1fr;}.grid,.grid-3,.timer-slot-grid{grid-template-columns:1fr;}.color-row{grid-template-columns:1fr;}}";
   page += "</style></head><body><div class='wrap'>";
   page += "<div class='hero'>";
   page += "<h1>Deskbuddy</h1>";
@@ -2392,6 +3341,13 @@ void handleRoot() {
   page += "<div class='ip'>ESP IP: ";
   page += WiFi.localIP().toString();
   page += "</div></div>";
+
+  page += "<div class='summary'>";
+  page += "<div class='summary-card'><span>Wi-Fi</span><strong>" + wifiStatusText() + "</strong></div>";
+  page += "<div class='summary-card'><span>Weather</span><strong>" + tempText() + " / " + weatherConditionText(weatherCode) + "</strong></div>";
+  page += "<div class='summary-card'><span>Psalm</span><strong>" + String(reading.ref) + "</strong></div>";
+  page += "<div class='summary-card'><span>Sync</span><strong>" + lastSyncText() + "</strong></div>";
+  page += "</div>";
 
   page += "<form method='POST' action='/save'>";
   page += "<div class='layout'><div class='stack'>";
@@ -2404,6 +3360,18 @@ void handleRoot() {
   page += "<textarea name='notes' maxlength='700'>";
   page += htmlEscape(notesText);
   page += "</textarea>";
+  page += "<div class='settings-block'>";
+  page += "<span class='settings-title'>Touch checklist</span>";
+  page += "<div class='settings-desc'>Edit the labels here, then tap each row on the device to mark it done.</div>";
+  page += "<div class='grid'>";
+  for (int i = 0; i < CHECKLIST_COUNT; i++) {
+    page += "<div><label class='label'>Item " + String(i + 1) + "</label>";
+    page += "<input name='checkText" + String(i) + "' maxlength='40' value='" + htmlEscape(checklistItems[i]) + "'>";
+    page += "<label style='display:flex;align-items:center;gap:8px;margin-top:8px;color:#a0aec0;font-size:13px;'>";
+    page += "<input style='width:auto;' type='checkbox' name='checkDone" + String(i) + "'" + String(checklistDone[i] ? " checked" : "") + "> Done";
+    page += "</label></div>";
+  }
+  page += "</div></div>";
   page += "<div class='muted'>Saved notes show up right away.</div>";
   page += "</div></div>";
 
@@ -2460,6 +3428,9 @@ void handleRoot() {
   page += "<label class='swatch" + String(bg=="soft"?" active":"") + "' style='background:" + themePreviewCss("soft") + ";'><input type='radio' name='bg' value='soft'" + String(bg=="soft"?" checked":"") + "></label>";
   page += "<label class='swatch" + String(bg=="midnight"?" active":"") + "' style='background:" + themePreviewCss("midnight") + ";'><input type='radio' name='bg' value='midnight'" + String(bg=="midnight"?" checked":"") + "></label>";
   page += "<label class='swatch" + String(bg=="graphite"?" active":"") + "' style='background:" + themePreviewCss("graphite") + ";'><input type='radio' name='bg' value='graphite'" + String(bg=="graphite"?" checked":"") + "></label>";
+  page += "<label class='swatch" + String(bg=="platinum"?" active":"") + "' style='background:" + themePreviewCss("platinum") + ";'><input type='radio' name='bg' value='platinum'" + String(bg=="platinum"?" checked":"") + "></label>";
+  page += "<label class='swatch" + String(bg=="cupertino"?" active":"") + "' style='background:" + themePreviewCss("cupertino") + ";'><input type='radio' name='bg' value='cupertino'" + String(bg=="cupertino"?" checked":"") + "></label>";
+  page += "<label class='swatch" + String(bg=="glass"?" active":"") + "' style='background:" + themePreviewCss("glass") + ";'><input type='radio' name='bg' value='glass'" + String(bg=="glass"?" checked":"") + "></label>";
   page += "<label class='swatch" + String(bg=="garnet"?" active":"") + "' style='background:" + themePreviewCss("garnet") + ";'><input type='radio' name='bg' value='garnet'" + String(bg=="garnet"?" checked":"") + "></label>";
   page += "<label class='swatch" + String(bg=="ochre"?" active":"") + "' style='background:" + themePreviewCss("ochre") + ";'><input type='radio' name='bg' value='ochre'" + String(bg=="ochre"?" checked":"") + "></label>";
   page += "</div></div>";
@@ -2475,7 +3446,7 @@ void handleRoot() {
   page += "<div class='settings-block'>";
   page += "<span class='settings-title'>General</span>";
   page += "<div class='grid'>";
-  page += "<div><label class='label'>Buddy nickname</label><input name='nickname' maxlength='24' value='" + htmlEscape(nickname) + "'></div>";
+  page += "<div class='reading-card'><span>Daily Psalm</span><strong>" + String(reading.ref) + "</strong><p>" + htmlEscape(String(reading.text)) + "</p><p style='margin-top:8px;color:#67e8f9;'>" + htmlEscape(String(reading.prompt)) + "</p></div>";
   page += "<div><label class='label'>Auto sleep interval</label><select name='sleepMin'>";
   page += "<option value='0'"  + String(sleepIntervalMin==0?" selected":"")  + ">Never</option>";
   page += "<option value='1'"  + String(sleepIntervalMin==1?" selected":"")  + ">1 minute</option>";
@@ -2486,6 +3457,7 @@ void handleRoot() {
   page += "</select><div class='muted' style='margin-top:8px;'>Sleep dims the screen first, then turns it fully off after 60 seconds.</div></div>";
   page += "<div><label class='label'>Brightness</label><input type='range' min='30' max='255' name='brightness' value='" + String(brightness) + "'></div>";
   page += "<div><label class='label'>Live card</label><select name='contentMode'>";
+  page += "<option value='mix'" + String(liveMode=="mix"?" selected":"") + ">Quotes and technology</option>";
   page += "<option value='quote'" + String(liveMode=="quote"?" selected":"") + ">Quote of the moment</option>";
   page += "<option value='tech'" + String(liveMode=="tech"?" selected":"") + ">Technology headline</option>";
   page += "<option value='off'" + String(liveMode=="off"?" selected":"") + ">Off</option>";
@@ -2535,7 +3507,7 @@ void handleRoot() {
   page += "<button type='submit'>Save to Deskbuddy</button>";
   page += "</div></div></form>";
   page += "<script>";
-  page += "var colorNames={accent:{standard:'Standard',ice:'Ice',white:'White',cyan:'Cyan',mint:'Mint',green:'Green',blue:'Blue',purple:'Purple',pink:'Pink',orange:'Orange',amber:'Amber',red:'Red'},text:{standard:'Standard',ice:'Ice',white:'White',cyan:'Cyan',mint:'Mint',green:'Green',blue:'Blue',purple:'Purple',pink:'Pink',orange:'Orange',amber:'Amber',red:'Red'},bg:{slate:'Slate',deep:'Deep black',nordic:'Nordic blue',forest:'Forest',coffee:'Coffee',soft:'Soft dark',midnight:'Midnight',graphite:'Graphite',garnet:'Garnet',ochre:'Ochre'}};";
+  page += "var colorNames={accent:{standard:'Standard',ice:'Ice',white:'White',cyan:'Cyan',mint:'Mint',green:'Green',blue:'Blue',purple:'Purple',pink:'Pink',orange:'Orange',amber:'Amber',red:'Red'},text:{standard:'Standard',ice:'Ice',white:'White',cyan:'Cyan',mint:'Mint',green:'Green',blue:'Blue',purple:'Purple',pink:'Pink',orange:'Orange',amber:'Amber',red:'Red'},bg:{slate:'Slate',deep:'Deep black',nordic:'Nordic blue',forest:'Forest',coffee:'Coffee',soft:'Soft dark',midnight:'Midnight',graphite:'Graphite',platinum:'Platinum',cupertino:'Cupertino',glass:'Glass',garnet:'Garnet',ochre:'Ochre'}};";
   page += "var panelStorageKey='deskbuddy-panel-state-v1';";
   page += "document.querySelectorAll('.swatch input').forEach(function(input){";
   page += "input.addEventListener('change',function(){";
@@ -2572,8 +3544,8 @@ void handleRoot() {
 
 void handleSave() {
   String newNotes  = server.hasArg("notes") ? server.arg("notes") : notesText;
-  String newAccent = server.hasArg("accent") ? server.arg("accent") : "cyan";
-  String newBg     = server.hasArg("bg") ? server.arg("bg") : "slate";
+  String newAccent = server.hasArg("accent") ? server.arg("accent") : "ice";
+  String newBg     = server.hasArg("bg") ? server.arg("bg") : "graphite";
   String newText   = server.hasArg("text") ? server.arg("text") : "standard";
   String newUnits  = server.hasArg("units") ? server.arg("units") : "metric";
   String newRegion = server.hasArg("region") ? server.arg("region") : "europe";
@@ -2593,6 +3565,17 @@ void handleSave() {
   newNotes.trim();
   newLoc.trim();
   newNickname.trim();
+  String newChecklistItems[CHECKLIST_COUNT];
+  bool newChecklistDone[CHECKLIST_COUNT];
+  for (int i = 0; i < CHECKLIST_COUNT; i++) {
+    String textKey = String("checkText") + String(i);
+    String doneKey = String("checkDone") + String(i);
+    newChecklistItems[i] = server.hasArg(textKey) ? server.arg(textKey) : checklistItems[i];
+    newChecklistItems[i].trim();
+    if (newChecklistItems[i].length() == 0) newChecklistItems[i] = "Task " + String(i + 1);
+    if (newChecklistItems[i].length() > 40) newChecklistItems[i] = newChecklistItems[i].substring(0, 40);
+    newChecklistDone[i] = server.hasArg(doneKey);
+  }
 
   if (newNotes.length() == 0) newNotes = "No notes yet.";
   if (newNotes.length() > 700) newNotes = newNotes.substring(0, 700);
@@ -2600,7 +3583,7 @@ void handleSave() {
   if (newNickname.length() > 24) newNickname = newNickname.substring(0, 24);
   if (newUnits != "metric" && newUnits != "imperial") newUnits = "metric";
   if (newRegion != "europe" && newRegion != "us") newRegion = "europe";
-  if (newContentMode != "quote" && newContentMode != "tech" && newContentMode != "off") newContentMode = "quote";
+  if (newContentMode != "mix" && newContentMode != "quote" && newContentMode != "tech" && newContentMode != "off") newContentMode = "mix";
 
   int newSleepMin = server.hasArg("sleepMin") ? server.arg("sleepMin").toInt() : sleepIntervalMin;
   sleepIntervalMin = constrain(newSleepMin, 0, 120);
@@ -2613,6 +3596,10 @@ void handleSave() {
     (newLoc != locationName);
 
   notesText = newNotes;
+  for (int i = 0; i < CHECKLIST_COUNT; i++) {
+    checklistItems[i] = newChecklistItems[i];
+    checklistDone[i] = newChecklistDone[i];
+  }
   buddyNickname = newNickname;
   locationName = newLoc;
   LAT = newLat;
@@ -2633,6 +3620,12 @@ void handleSave() {
   }
 
   prefs.putString("notes", notesText);
+  for (int i = 0; i < CHECKLIST_COUNT; i++) {
+    String textKey = String("checkText") + String(i);
+    String doneKey = String("checkDone") + String(i);
+    prefs.putString(textKey.c_str(), checklistItems[i]);
+    prefs.putBool(doneKey.c_str(), checklistDone[i]);
+  }
   prefs.putString("accent", newAccent);
   prefs.putString("bg", newBg);
   prefs.putString("text", newText);
@@ -2685,6 +3678,8 @@ void handleSave() {
 
   if (locationChanged) resetDataCaches();
   lastInsightFetch = 0;
+  lastInsightAttempt = 0;
+  insightFailureCount = 0;
   lastInsightText = "";
   ensureInsight();
 
@@ -2883,22 +3878,17 @@ void loop() {
       return;
     }
 
-    if (tx >= SCREEN_W - 36 && ty <= TOPBAR_H) {
-      toggleSleepMode();
-      pageDirty = true;
-    } else {
-      if (sleepDimmed) {
-        if (!manualDimMode) {
-          wakeDisplay();
-        } else {
-          if (!handleHomeTouch(tx, ty) && !handleStatusTouch(tx, ty) && !handleSettingsTouch(tx, ty)) {
-            handleNavTouch(tx, ty);
-          }
-        }
+    if (sleepDimmed) {
+      if (!manualDimMode) {
+        wakeDisplay();
       } else {
-        if (!handleHomeTouch(tx, ty) && !handleStatusTouch(tx, ty) && !handleSettingsTouch(tx, ty)) {
+        if (!handleHomeTouch(tx, ty) && !handleNotesTouch(tx, ty) && !handleStatusTouch(tx, ty) && !handleSettingsTouch(tx, ty)) {
           handleNavTouch(tx, ty);
         }
+      }
+    } else {
+      if (!handleHomeTouch(tx, ty) && !handleNotesTouch(tx, ty) && !handleStatusTouch(tx, ty) && !handleSettingsTouch(tx, ty)) {
+        handleNavTouch(tx, ty);
       }
     }
   }
@@ -2916,6 +3906,11 @@ void loop() {
     updateCurrentPageDynamic();
     pageDirty = false;
     dataDirty = false;
+  }
+
+  if (currentPage == PAGE_HOME && !focusMenuOpen && !timerDoneDialogOpen &&
+      millis() - lastHomeShowSlideMs >= HOME_SHOW_SLIDE_MS) {
+    advanceHomeShowSlide();
   }
 
   if (millis() - lastClockTick >= CLOCK_TICK_MS) {

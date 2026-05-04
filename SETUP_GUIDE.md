@@ -1,203 +1,120 @@
 # Deskbuddy Setup Guide
 
-This guide explains how to install and upload the Deskbuddy software to a compatible ESP32 touchscreen board using **Arduino IDE**.
+This guide covers the tested setup for the ESP32-2432S028R CYD board.
 
+## 1. Hardware
 
-## What You Need
+Use a USB data cable and connect the board to the computer. The tested board is:
 
-Before you begin, make sure you have:
+- ESP32-2432S028R CYD
+- ILI9341 240 x 320 TFT display
+- XPT2046 resistive touch
 
-- A compatible ESP32 touchscreen board
-- A USB cable with data support
-- Arduino IDE installed
-- Access to a WiFi network
-- The Deskbuddy source code
+If flashing fails, try another cable before changing code.
 
-## 1. Install ESP32 Board Support
+## 2. Install Arduino Tools
 
-Deskbuddy is built for ESP32, so you first need to install the ESP32 board package in Arduino IDE.
+Install:
 
-1. Open **Arduino IDE**
-2. Go to **Tools > Board > Boards Manager**
-3. Search for `ESP32`
-4. Install **ESP32 by Espressif Systems**
-
-After installation, select the board that best matches your hardware under:
-
-**Tools > Board**
-
-If you are unsure which profile to use, start with the closest ESP32 option and adjust if needed.
-
-## 2. Install Required Libraries
-
-Open:
-
-**Sketch > Include Library > Manage Libraries**
-
-Install these libraries:
-
+- Arduino IDE or `arduino-cli`
+- ESP32 board package by Espressif
 - `TFT_eSPI`
 - `ArduinoJson`
 - `XPT2046_Touchscreen`
+- `WiFiManager`
 
-The following are normally included automatically with the ESP32 board package:
+Board profile:
 
-- `WiFi`
-- `HTTPClient`
-- `WiFiClientSecure`
-- `WebServer`
-- `Preferences`
-- `SPI`
+```text
+ESP32-2432S028R CYD
+```
+
+CLI FQBN:
+
+```text
+esp32:esp32:jczn_2432s028r
+```
 
 ## 3. Configure TFT_eSPI
 
-This is the most important step for getting the display to work correctly.
+Replace the installed TFT_eSPI `User_Setup.h` with this repo's [`User_Setup.h`](User_Setup.h).
 
-Deskbuddy uses the **TFT_eSPI** library, and you will most likely need to replace or edit the `User_Setup` file inside the TFT_eSPI library folder so it matches your display.
+Typical macOS path:
 
-If the TFT_eSPI setup is wrong, you may see problems like:
-
-- A black or white screen
-- Wrong colors
-- Incorrect rotation
-- No visible output
-- Touch and display not matching properly
-
-### What to do
-
-Find the TFT_eSPI library folder on your computer and locate:
-
-`User_Setup.h`
-
-Then either:
-
-- Replace it with a working setup for your display
-- Or edit the driver and pin settings manually
-
-If you are using a specific ESP32 touchscreen board variant, it is a good idea to keep a backup of your working `User_Setup.h`.
-
-## 4. Open the Deskbuddy Code
-
-Open the Deskbuddy project in Arduino IDE.
-
-For the public version, use:
-
-- [desk_buddy_github.cpp]
-
-If you rename the file or convert it to an `.ino`, that is also fine as long as the project builds correctly in Arduino IDE.
-
-## 5. Add Your WiFi Credentials
-
-Before uploading, update the WiFi values in the code:
-
-```cpp
-const char* WIFI_SSID = "YOUR_WIFI_SSID";
-const char* WIFI_PASS = "YOUR_WIFI_PASSWORD";
+```sh
+~/Documents/Arduino/libraries/TFT_eSPI/User_Setup.h
 ```
 
-Replace those placeholders with your own WiFi network name and password.
+This is the key fix for white-screen issues.
 
-## 6. Select the Correct Board and Port
+## 4. Wi-Fi Setup
 
-In Arduino IDE:
+Recommended path:
 
-- Select the correct **ESP32 board**
-- Select the correct **COM port**
+1. Flash the firmware.
+2. Open the `Setup` page on the device.
+3. Tap the Wi-Fi card.
+4. Connect your phone or computer to `Deskbuddy Setup`.
+5. Choose your Wi-Fi network in the portal.
 
-You can find the port under:
+Optional developer path:
 
-**Tools > Port**
+```sh
+cp arduino_secrets.example.h arduino_secrets.h
+```
 
-If no port appears:
+Edit `arduino_secrets.h` locally. It is ignored by Git.
 
-- Reconnect the board
-- Try another USB cable
-- Make sure the cable supports data, not only charging
+## 5. Compile And Upload
 
-## 7. Upload the Code
+Compile:
 
-Once everything is configured:
+```sh
+arduino-cli compile --fqbn esp32:esp32:jczn_2432s028r:UploadSpeed=115200,PartitionScheme=huge_app Deskbuddy
+```
 
-1. Connect the ESP32 board by USB
-2. Click **Upload**
-3. Wait for the sketch to compile and flash
+Upload:
 
-On some ESP32 boards, you may need to hold the **BOOT** button during upload if flashing does not start automatically.
+```sh
+arduino-cli compile --upload -p /dev/cu.usbserial-120 --fqbn esp32:esp32:jczn_2432s028r:UploadSpeed=115200,PartitionScheme=huge_app Deskbuddy
+```
 
-## 8. First Boot
+If upload does not start automatically, hold BOOT while the upload begins.
 
-After a successful upload, the device should:
+## 6. First Boot
 
-- Power on the display
-- Connect to WiFi
+The device should:
+
+- Turn on the display
+- Connect to Wi-Fi or wait for setup
 - Sync time
-- Fetch weather data
-- Start the local web interface
+- Fetch weather and live content
+- Start the local browser settings page
 
-You can also open the Serial Monitor to check boot messages:
+Use Serial Monitor at `115200` baud to see the local IP address.
 
-**Tools > Serial Monitor**
+## Troubleshooting
 
-In many cases, the local IP address will be printed there after WiFi connection succeeds.
+White screen:
 
-## 9. Open the Web Interface
+- Replace TFT_eSPI `User_Setup.h`
+- Confirm `ILI9341_2_DRIVER`
+- Confirm board profile `jczn_2432s028r`
 
-Once the ESP32 is connected to your network, open its local IP address in your browser.
+Touch wrong or inverted:
 
-From the browser interface, you can adjust things like:
+- Confirm XPT2046 pins in `User_Setup.h`
+- Confirm rotation in `desk_buddy_github.cpp`
 
-- Accent colors and theme
-- Text colors
-- Regional time and date format
-- Timer presets
-- Weather location
-- Notes
-- Nickname
-- Alert behavior
+Wi-Fi not connecting:
 
-This makes it easy to personalize the device without editing the code every time.
+- Use the on-device `Setup` page and start the Wi-Fi portal
+- Confirm the network is 2.4 GHz
+- Check serial logs
 
-## 10. Troubleshooting
+Weather not updating:
 
-### The display stays black or white
+- Confirm Wi-Fi is online
+- Confirm city/lat/lng in Setup or browser settings
+- Check that public APIs are reachable from your network
 
-- Check the TFT_eSPI `User_Setup.h`
-- Confirm the correct display driver is selected
-- Verify that the board is receiving power
-
-### The display works, but colors or rotation are wrong
-
-- Check the TFT_eSPI configuration
-- Verify display driver and pin mapping
-- Confirm rotation settings in the code
-
-### Touch does not work correctly
-
-- Check touch wiring and controller support
-- Verify rotation and calibration values
-
-### Upload fails
-
-- Make sure the correct COM port is selected
-- Try another USB cable
-- Hold the **BOOT** button during upload if needed
-
-### WiFi does not connect
-
-- Double-check SSID and password
-- Make sure the network is in range
-- Check the Serial Monitor for connection messages
-
-### Time or weather does not update
-
-- Confirm WiFi is connected
-- Check that the location values are valid
-- Verify that API requests are not being blocked
-
-## Final Notes
-
-Deskbuddy is designed to be easy to customize, but exact setup details may vary depending on your ESP32 touchscreen board version.
-
-For most users, the **TFT_eSPI `User_Setup.h` configuration is the most important part** of the installation.
-
-Once that is correct, the rest of the setup is usually straightforward.
