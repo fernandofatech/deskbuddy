@@ -23,8 +23,20 @@
 // =========================================================
 // WIFI
 // =========================================================
-const char* WIFI_SSID = "YOUR_WIFI_SSID";       // Replace with your WiFi network name
-const char* WIFI_PASS = "YOUR_WIFI_PASSWORD";   // Replace with your WiFi password
+#if __has_include("arduino_secrets.h")
+#include "arduino_secrets.h"
+#endif
+
+#ifndef DESKBUDDY_WIFI_SSID
+#define DESKBUDDY_WIFI_SSID "YOUR_WIFI_SSID"
+#endif
+
+#ifndef DESKBUDDY_WIFI_PASS
+#define DESKBUDDY_WIFI_PASS "YOUR_WIFI_PASSWORD"
+#endif
+
+const char* WIFI_SSID = DESKBUDDY_WIFI_SSID;
+const char* WIFI_PASS = DESKBUDDY_WIFI_PASS;
 
 // =========================================================
 // DISPLAY / TOUCH

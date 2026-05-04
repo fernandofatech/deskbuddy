@@ -1,2 +1,66 @@
 # Deskbuddy
-Deskbuddy is a compact ESP32-based smart desk companion built around a touchscreen display. The project combines 3D printing, simple hardware, and software to turn a raw ESP32 screen into a practical mini dashboard for your workspace. It is designed to be easy to set up and easy to personalize.
+
+Deskbuddy is a compact ESP32-based smart desk companion built around a touchscreen display. The project combines 3D printing, simple hardware, and software to turn a raw ESP32 screen into a practical mini dashboard for your workspace.
+
+## Tested Board
+
+This fork has been tested on the **ESP32-2432S028R** 2.8 inch touchscreen board, also commonly sold as:
+
+- **CYD** / Cheap Yellow Display
+- **ESP32-2432S028R ILI9341**
+- 240 x 320 TFT display with XPT2046 touch
+
+The working display configuration for this board is included in [`User_Setup.h`](User_Setup.h):
+
+- Display driver: `ILI9341_2_DRIVER`
+- Display SPI bus: `HSPI`
+- TFT pins: MISO `12`, MOSI `13`, SCLK `14`, CS `15`, DC `2`
+- Backlight pin: `21`
+- Touch pins: CS `33`, IRQ `36`, SCK `25`, MISO `39`, MOSI `32`
+
+If your screen stays white, make sure the included `User_Setup.h` has been copied into the installed `TFT_eSPI` library folder, replacing the library's default setup file.
+
+## Wi-Fi Credentials
+
+Do not hardcode Wi-Fi credentials in the sketch.
+
+Copy the example secrets file and edit it locally:
+
+```sh
+cp arduino_secrets.example.h arduino_secrets.h
+```
+
+Then set:
+
+```cpp
+#define DESKBUDDY_WIFI_SSID "YOUR_WIFI_SSID"
+#define DESKBUDDY_WIFI_PASS "YOUR_WIFI_PASSWORD"
+```
+
+`arduino_secrets.h` is ignored by Git so your network name and password are not committed.
+
+## Arduino Setup
+
+Use the Arduino ESP32 board package and select:
+
+- Board: `ESP32-2432S028R CYD`
+- Partition scheme: `Huge APP (3MB No OTA/1MB SPIFFS)`
+- Upload speed: `115200` if higher speeds fail
+
+Install these Arduino libraries:
+
+- `TFT_eSPI`
+- `ArduinoJson`
+- `XPT2046_Touchscreen`
+
+Before compiling, replace the installed TFT_eSPI setup file with this repo's `User_Setup.h`.
+
+On macOS with `arduino-cli`, the TFT_eSPI setup file is usually:
+
+```sh
+~/Documents/Arduino/libraries/TFT_eSPI/User_Setup.h
+```
+
+## Notes
+
+The firmware exposes a local web interface after the ESP32 connects to Wi-Fi. Use the serial monitor at `115200` baud to inspect boot logs and find the device IP address.

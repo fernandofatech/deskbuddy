@@ -1,0 +1,8 @@
+arduino_secrets.h
+Deskbuddy/arduino_secrets.h
+*.bin
+*.elf
+*.map
+*.hex
+build/
+.DS_Store

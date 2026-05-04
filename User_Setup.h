@@ -1,5 +1,6 @@
 //#define ILI9341_DRIVER
-#define ST7789_DRIVER
+#define ILI9341_2_DRIVER
+//#define ST7789_DRIVER
 #define TFT_WIDTH 240
 #define TFT_HEIGHT 320
 
@@ -28,6 +29,8 @@
 #define LOAD_FONT8  // Ekstra stor
 #define LOAD_GFXFF  // FreeFonts
 
-#define SPI_FREQUENCY  40000000
+#define SPI_FREQUENCY  55000000
+#define SPI_READ_FREQUENCY 20000000
 // SPI clock frequency for touch controller
 #define SPI_TOUCH_FREQUENCY  2500000
+#define USE_HSPI_PORT
