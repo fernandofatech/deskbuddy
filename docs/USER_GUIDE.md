@@ -7,7 +7,7 @@ Deskbuddy is organized around quick workday checks: time, weather, focus, notes,
 Home is the default glance screen. It shows the clock and four configurable widgets.
 The refreshed Home screen works like a small smart display. It rotates through large-format slides for at-a-glance status, weather, focus/checklist, live briefing, and a daily psalm reading.
 
-The top bar is intentionally compact to leave more room for content. The bottom menu normally stays collapsed as a small handle; tap the bottom edge to open navigation, then tap a page.
+The top bar is intentionally compact to leave more room for content. The bottom menu is always visible with large touch targets so it is easier to use with a finger.
 
 Good default widgets:
 
@@ -61,7 +61,7 @@ It has six tool screens:
 - Gateway Tools: common gateway service checks such as DNS, HTTP, HTTPS, or SSH when reachable
 - Device Info: MAC address, subnet, uptime, and last sync
 
-Tap the left or right side to move between tool screens. Tap the center to run the active tool, such as scan Wi-Fi or check gateway services. ESP32 boards only scan 2.4 GHz Wi-Fi; 5 GHz-only networks will not appear.
+Tap the far left or far right side to move between tool screens. Each tool screen also has a large action button near the bottom, such as Scan WiFi, Next AP, or Check ports. ESP32 boards only scan 2.4 GHz Wi-Fi; 5 GHz-only networks will not appear.
 
 To connect to another Wi-Fi network, open Setup and tap Wi-Fi to start the `Deskbuddy Setup` portal. Choose the SSID and type the password in the browser portal.
 

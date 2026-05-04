@@ -117,7 +117,7 @@ String regionFormatKey = "europe"; // europe = 24h + dd.mm.yyyy, us = 12h + mm/d
 const int SCREEN_W = 240;
 const int SCREEN_H = 320;
 const int TOPBAR_H = 18;
-const int NAV_H    = 28;
+const int NAV_H    = 44;
 
 const int HOME_GRID_Y1 = 120;
 const int HOME_GRID_Y2 = 198;
@@ -191,7 +191,6 @@ const int NAV_COUNT = 5;
 
 Page currentPage = PAGE_HOME;
 Page lastDrawnPage = (Page)-1;
-bool navExpanded = false;
 
 unsigned long lastClockTick = 0;
 unsigned long lastDataTick  = 0;
@@ -1733,13 +1732,6 @@ void drawTopBar(const String& title) {
 
 void drawNavBar() {
   const int y = SCREEN_H - NAV_H;
-  if (!navExpanded) {
-    tft.fillRect(0, SCREEN_H - 9, SCREEN_W, 9, COL_PANEL_ALT);
-    tft.drawFastHLine(0, SCREEN_H - 10, SCREEN_W, COL_STROKE);
-    tft.fillRoundRect(88, SCREEN_H - 6, 64, 3, 2, COL_DIM);
-    return;
-  }
-
   tft.fillRect(0, y, SCREEN_W, NAV_H, COL_PANEL_ALT);
   tft.drawFastHLine(0, y, SCREEN_W, COL_STROKE);
 
@@ -1753,8 +1745,8 @@ void drawNavBar() {
     uint16_t bg = active ? COL_ACCENT : COL_PANEL;
     uint16_t fg = active ? TFT_BLACK : COL_TEXT;
 
-    tft.fillRoundRect(bx + 4, y + 4, btnW - 8, NAV_H - 8, 7, bg);
-    tft.drawRoundRect(bx + 4, y + 4, btnW - 8, NAV_H - 8, 7, active ? COL_ACCENT : COL_STROKE);
+    tft.fillRoundRect(bx + 4, y + 6, btnW - 8, NAV_H - 12, 8, bg);
+    tft.drawRoundRect(bx + 4, y + 6, btnW - 8, NAV_H - 12, 8, active ? COL_ACCENT : COL_STROKE);
 
     tft.setTextDatum(MC_DATUM);
     tft.setTextColor(fg, bg);
@@ -2764,7 +2756,7 @@ void drawStatusPageFull() {
   drawTopBar("Network");
   drawNavBar();
 
-  drawCard(8, 24, 224, 256, true);
+  drawCard(8, 24, 224, 244, true);
 
   pageDirty = false;
   lastDrawnPage = PAGE_STATUS;
@@ -2775,8 +2767,15 @@ void drawStatusPageFull() {
 void drawNetworkDots() {
   int startX = 96;
   for (int i = 0; i < NETWORK_TOOL_PAGE_COUNT; i++) {
-    tft.fillCircle(startX + i * 16, 266, 3, i == networkToolPage ? COL_ACCENT : COL_STROKE);
+    tft.fillCircle(startX + i * 16, 254, 3, i == networkToolPage ? COL_ACCENT : COL_STROKE);
   }
+}
+
+void drawNetworkActionButton(const String& label) {
+  tft.fillRoundRect(56, 222, 128, 30, 10, COL_ACCENT);
+  tft.drawRoundRect(56, 222, 128, 30, 10, COL_ACCENT);
+  tft.setTextColor(TFT_BLACK, COL_ACCENT);
+  tft.drawCentreString(label.c_str(), 120, 229, 2);
 }
 
 void drawNetworkHeader(const String& title, const String& action) {
@@ -2807,10 +2806,10 @@ void updateStatusDynamic() {
   if (key == lastNetworkPanelText) return;
   lastNetworkPanelText = key;
 
-  tft.fillRect(18, 32, 204, 232, COL_PANEL);
+  tft.fillRect(18, 32, 204, 220, COL_PANEL);
 
   if (networkToolPage == 0) {
-    drawNetworkHeader("Network Console", "Swipe/tap");
+    drawNetworkHeader("Network Console", "Tap right");
     tft.setTextColor(statusColor(), COL_PANEL);
     tft.drawString(wifiStatusText(), 18, 70, 4);
     tft.setTextColor(COL_DIM, COL_PANEL);
@@ -2819,8 +2818,7 @@ void updateStatusDynamic() {
     tft.drawString("IP  " + ipText(), 18, 136, 2);
     tft.drawString("GW  " + gatewayText(), 18, 162, 2);
     tft.drawString("DNS " + dnsText(), 18, 188, 2);
-    tft.setTextColor(COL_ACCENT, COL_PANEL);
-    tft.drawString("Signal " + signalText(), 18, 226, 2);
+    drawNetworkActionButton("Next tool");
   } else if (networkToolPage == 1) {
     drawNetworkHeader("WiFi Scanner", "Tap scan");
     tft.setTextColor(COL_DIM, COL_PANEL);
@@ -2829,8 +2827,8 @@ void updateStatusDynamic() {
       tft.setTextColor(COL_TEXT, COL_PANEL);
       tft.drawString("Tap center to scan", 18, 104, 2);
     } else {
-      for (int i = 0; i < wifiScanCount; i++) {
-        int y = 86 + i * 27;
+      for (int i = 0; i < min(wifiScanCount, 6); i++) {
+        int y = 78 + i * 23;
         uint16_t rowColor = wifiScanItems[i].rssi > -60 ? COL_GREEN : (wifiScanItems[i].rssi > -75 ? COL_YELLOW : COL_DIM);
         tft.setTextColor(rowColor, COL_PANEL);
         tft.drawString(String(wifiScanItems[i].rssi) + "dBm", 18, y, 1);
@@ -2841,6 +2839,7 @@ void updateStatusDynamic() {
         tft.drawRightString(meta.c_str(), 222, y, 1);
       }
     }
+    drawNetworkActionButton("Scan WiFi");
   } else if (networkToolPage == 2) {
     drawNetworkHeader("Network Detail", "Tap next");
     if (wifiScanCount == 0) {
@@ -2867,8 +2866,9 @@ void updateStatusDynamic() {
       tft.drawString(String(item.channel), 110, 180, 2);
       tft.drawRightString(authModeText(item.auth).c_str(), 222, 180, 2);
       tft.setTextColor(COL_ACCENT, COL_PANEL);
-      tft.drawString("Item " + String(wifiDetailIndex + 1) + "/" + String(wifiScanCount), 18, 226, 2);
+      tft.drawString("Item " + String(wifiDetailIndex + 1) + "/" + String(wifiScanCount), 18, 210, 2);
     }
+    drawNetworkActionButton("Next AP");
   } else if (networkToolPage == 3) {
     drawNetworkHeader("Channel Map", "Tap scan");
     tft.setTextColor(COL_DIM, COL_PANEL);
@@ -2884,7 +2884,8 @@ void updateStatusDynamic() {
       if (ch == 1 || ch == 6 || ch == 11) tft.drawCentreString(String(ch).c_str(), x + 6, 208, 1);
     }
     tft.setTextColor(COL_TEXT, COL_PANEL);
-    tft.drawString("APs " + String(wifiScanCount), 18, 232, 2);
+    tft.drawString("APs " + String(wifiScanCount), 18, 214, 2);
+    drawNetworkActionButton("Scan WiFi");
   } else if (networkToolPage == 4) {
     drawNetworkHeader("Gateway Tools", "Tap check");
     tft.setTextColor(COL_DIM, COL_PANEL);
@@ -2895,7 +2896,8 @@ void updateStatusDynamic() {
     tft.drawString("Common services", 18, 132, 1);
     drawWrappedTextLimited(18, 152, 198, gatewayServiceText, 2, COL_ACCENT, COL_PANEL, 3);
     tft.setTextColor(COL_DIM, COL_PANEL);
-    tft.drawString("Checks only your gateway.", 18, 230, 1);
+    tft.drawString("Checks only your gateway.", 18, 210, 1);
+    drawNetworkActionButton("Check ports");
   } else {
     drawNetworkHeader("Device Info", "Local");
     tft.setTextColor(COL_DIM, COL_PANEL);
@@ -2910,8 +2912,7 @@ void updateStatusDynamic() {
     tft.drawString("Uptime", 18, 164, 1);
     tft.setTextColor(COL_TEXT, COL_PANEL);
     tft.drawString(uptimeText(), 18, 180, 4);
-    tft.setTextColor(COL_ACCENT, COL_PANEL);
-    tft.drawString(lastSyncText(), 18, 228, 1);
+    drawNetworkActionButton("Next tool");
   }
 
   drawNetworkDots();
@@ -3162,15 +3163,15 @@ bool handleStatusTouch(int x, int y) {
   if (currentPage != PAGE_STATUS) return false;
 
   if (y >= TOPBAR_H && y < SCREEN_H - NAV_H) {
-    if (x < SCREEN_W / 4) {
+    if (x < 56) {
       networkToolPage = (networkToolPage + NETWORK_TOOL_PAGE_COUNT - 1) % NETWORK_TOOL_PAGE_COUNT;
-    } else if (x > SCREEN_W * 3 / 4) {
+    } else if (x > 184) {
       networkToolPage = (networkToolPage + 1) % NETWORK_TOOL_PAGE_COUNT;
-    } else if (networkToolPage == 1 || networkToolPage == 3) {
+    } else if (y >= 212 && y < 264 && (networkToolPage == 1 || networkToolPage == 3)) {
       scanWifiNetworksNow();
-    } else if (networkToolPage == 2) {
+    } else if (y >= 212 && y < 264 && networkToolPage == 2) {
       if (wifiScanCount > 0) wifiDetailIndex = (wifiDetailIndex + 1) % wifiScanCount;
-    } else if (networkToolPage == 4) {
+    } else if (y >= 212 && y < 264 && networkToolPage == 4) {
       gatewayServiceText = detectGatewayServices();
     } else {
       networkToolPage = (networkToolPage + 1) % NETWORK_TOOL_PAGE_COUNT;
@@ -3236,18 +3237,12 @@ bool handleSettingsTouch(int x, int y) {
 // =========================================================
 void handleNavTouch(int x, int y) {
   if (y < SCREEN_H - NAV_H) return;
-  if (!navExpanded) {
-    navExpanded = true;
-    pageDirty = true;
-    return;
-  }
 
   int btnW = SCREEN_W / NAV_COUNT;
   int idx = x / btnW;
   if (idx < 0 || idx >= NAV_COUNT) return;
 
   Page newPage = (Page)idx;
-  navExpanded = false;
   if (newPage != currentPage) {
     currentPage = newPage;
     pageDirty = true;
