@@ -2221,7 +2221,6 @@ void drawHomeOverviewSlide() {
   tft.setTextColor(COL_DIM, COL_PANEL);
   tft.drawString(formatDateParts(tmNow), 20, 110, 2);
   tft.setTextColor(COL_TEXT, COL_PANEL);
-  drawWeatherIcon(168, 91, weatherCode, 34, COL_PANEL);
   tft.drawRightString(tempText().c_str(), 222, 78, 4);
   tft.setTextColor(COL_ACCENT, COL_PANEL);
   tft.drawRightString(weatherConditionText(weatherCode).substring(0, 12).c_str(), 222, 112, 1);
@@ -2259,8 +2258,8 @@ void drawHomeWeatherSlide() {
   tft.setTextColor(COL_ACCENT, COL_PANEL);
   tft.drawString(weatherConditionText(weatherCode).substring(0, 18), 20, 108, 2);
   tft.setTextColor(COL_DIM, COL_PANEL);
-  tft.drawRightString((windText() + "  " + uvText()).c_str(), 222, 78, 1);
-  tft.drawRightString(tempRangeText().c_str(), 222, 120, 1);
+  tft.drawString(tempRangeText(), 20, 128, 1);
+  tft.drawRightString((windText() + "  " + uvText()).c_str(), 222, 128, 1);
 
   drawCard(8, 152, 224, 46, true);
   tft.fillRect(18, 160, 204, 28, COL_PANEL);
@@ -2269,9 +2268,8 @@ void drawHomeWeatherSlide() {
     if (!hourlyForecasts[i].valid) continue;
     tft.setTextColor(COL_DIM, COL_PANEL);
     tft.drawCentreString(formatHourLabel(hourlyForecasts[i].minuteOfDay).c_str(), x + 18, 160, 1);
-    drawWeatherIcon(x + 18, 181, hourlyForecasts[i].weatherCode, 16, COL_PANEL);
     tft.setTextColor(COL_TEXT, COL_PANEL);
-    tft.drawCentreString(formatCompactTemp(hourlyForecasts[i].tempC).c_str(), x + 18, 184, 1);
+    tft.drawCentreString(formatCompactTemp(hourlyForecasts[i].tempC).c_str(), x + 18, 174, 2);
   }
 
   drawCard(8, 206, 224, 48, false);
@@ -2281,10 +2279,10 @@ void drawHomeWeatherSlide() {
     int x = 18 + i * 68;
     tft.setTextColor(i == 0 ? COL_TEXT : COL_DIM, COL_PANEL);
     tft.drawString(dailyForecasts[i].label.substring(0, 5), x, 214, 1);
-    drawWeatherIcon(x + 40, 220, dailyForecasts[i].weatherCode, 14, COL_PANEL);
+    tft.drawString(weatherShortText(dailyForecasts[i].weatherCode).substring(0, 6), x, 222, 1);
     tft.setTextColor(COL_ACCENT, COL_PANEL);
     String range = formatCompactTemp(dailyForecasts[i].maxC) + "/" + formatCompactTemp(dailyForecasts[i].minC);
-    tft.drawString(range, x, 230, 1);
+    tft.drawString(range, x, 236, 1);
   }
 }
 
@@ -2552,8 +2550,8 @@ void updateWeatherDynamic() {
   tft.fillRect(12, 44, 216, 70, COL_PANEL);
   tft.setTextColor(COL_DIM, COL_PANEL);
   tft.drawString(locationName, 18, 48, 2);
-  drawWeatherIcon(108, 78, weatherCode, 34, COL_PANEL);
-  tft.drawString(weatherConditionText(weatherCode), 18, 72, 2);
+  drawWeatherIcon(108, 80, weatherCode, 28, COL_PANEL);
+  tft.drawString(weatherConditionText(weatherCode).substring(0, 10), 18, 72, 2);
 
   tft.setTextColor(COL_TEXT, COL_PANEL);
   tft.drawString(tempText(), 132, 50, 4);
@@ -2576,9 +2574,8 @@ void updateWeatherDynamic() {
     }
     tft.setTextColor(COL_DIM, COL_PANEL);
     tft.drawCentreString(formatHourLabel(hourlyForecasts[i].minuteOfDay).c_str(), x + 14, 146, 1);
-    drawWeatherIcon(x + 14, 160, hourlyForecasts[i].weatherCode, 12, COL_PANEL);
     tft.setTextColor(COL_TEXT, COL_PANEL);
-    tft.drawCentreString(formatCompactTemp(hourlyForecasts[i].tempC).c_str(), x + 14, 164, 1);
+    tft.drawCentreString(formatCompactTemp(hourlyForecasts[i].tempC).c_str(), x + 14, 158, 2);
     tft.setTextColor(COL_ACCENT, COL_PANEL);
     String pop = isnan(hourlyForecasts[i].precipProb) ? "--" : String((int)roundf(hourlyForecasts[i].precipProb)) + "%";
     tft.drawCentreString(pop.c_str(), x + 14, 176, 1);
@@ -2592,8 +2589,7 @@ void updateWeatherDynamic() {
     if (!dailyForecasts[i].valid) continue;
     tft.setTextColor(i == 0 ? COL_TEXT : COL_DIM, COL_PANEL);
     tft.drawString(dailyForecasts[i].label.substring(0, 5), 18, y, 1);
-    drawWeatherIcon(74, y + 3, dailyForecasts[i].weatherCode, 8, COL_PANEL);
-    tft.drawString(weatherShortText(dailyForecasts[i].weatherCode).substring(0, 6), 86, y, 1);
+    tft.drawString(weatherShortText(dailyForecasts[i].weatherCode).substring(0, 6), 70, y, 1);
     String range = formatCompactTemp(dailyForecasts[i].maxC) + "/" + formatCompactTemp(dailyForecasts[i].minC);
     tft.setTextColor(COL_TEXT, COL_PANEL);
     tft.drawRightString(range.c_str(), 176, y, 1);
