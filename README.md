@@ -36,7 +36,7 @@ If the screen stays white, replace the installed TFT_eSPI `User_Setup.h` with th
 - Live ticker/card with quotes, technology headlines, or mixed rotation with local fallback
 - Daily local Bible reflection with psalm/verse reference and short prompt, available without internet
 - On-device Setup page for brightness, city presets, live content mode, and Wi-Fi portal
-- Network diagnostics page with Wi-Fi scan, RSSI, channel/security, IP, gateway, DNS, and common gateway service checks
+- Standalone Network console with Wi-Fi scan, RSSI, channel/security, IP, gateway, DNS, common gateway service checks, MAC, subnet, and uptime
 - Local browser settings page after the board joins Wi-Fi
 - Open-Meteo weather, hourly forecast, daily forecast, wind, UV, and rain probability
 - Sunrise and sunset from sunrise-sunset.org

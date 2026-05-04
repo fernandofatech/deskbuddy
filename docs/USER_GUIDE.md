@@ -50,18 +50,16 @@ Edit checklist labels in the browser settings page, then tap rows on the device 
 
 ## Network
 
-The `Net` page is for safe diagnostics on your own device and network.
+The `Net` page is a standalone safe diagnostics console for your own device and network.
 
-It shows:
+It has four tool screens:
 
-- Wi-Fi state
-- Signal strength
-- Local IP address
-- Gateway and DNS information
-- Common gateway services such as DNS, HTTP, HTTPS, or SSH when reachable
-- Nearby 2.4 GHz Wi-Fi networks with RSSI, channel, and security type
+- Network Console: Wi-Fi state, SSID, signal, IP, gateway, and DNS
+- WiFi Scanner: nearby 2.4 GHz networks with RSSI, channel, and security type
+- Gateway Tools: common gateway service checks such as DNS, HTTP, HTTPS, or SSH when reachable
+- Device Info: MAC address, subnet, uptime, and last sync
 
-Tap the IP/gateway card to refresh common service checks. Tap the Wi-Fi scan card to rescan nearby networks. ESP32 boards only scan 2.4 GHz Wi-Fi; 5 GHz-only networks will not appear.
+Tap the left or right side to move between tool screens. Tap the center to run the active tool, such as scan Wi-Fi or check gateway services. ESP32 boards only scan 2.4 GHz Wi-Fi; 5 GHz-only networks will not appear.
 
 To connect to another Wi-Fi network, open Setup and tap Wi-Fi to start the `Deskbuddy Setup` portal. Choose the SSID and type the password in the browser portal.
 
