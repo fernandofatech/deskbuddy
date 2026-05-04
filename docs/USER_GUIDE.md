@@ -1,11 +1,13 @@
 # Deskbuddy User Guide
 
-Deskbuddy is organized around quick workday checks: time, weather, focus, notes, and device setup.
+Deskbuddy is organized around quick workday checks: time, weather, focus, notes, network status, and device setup.
 
 ## Home
 
 Home is the default glance screen. It shows the clock and four configurable widgets.
 The refreshed Home screen works like a small smart display. It rotates through large-format slides for at-a-glance status, weather, focus/checklist, live briefing, and a daily psalm reading.
+
+The top bar is intentionally compact to leave more room for content. The bottom menu normally stays collapsed as a small handle; tap the bottom edge to open navigation, then tap a page.
 
 Good default widgets:
 
@@ -46,17 +48,22 @@ Use Notes for a touch checklist and short reminders that should stay visible dur
 
 Edit checklist labels in the browser settings page, then tap rows on the device to mark them done. The live card below the checklist can show quotes, technology headlines, or a mixed rotation. If public APIs fail, Deskbuddy keeps a local fallback message visible and retries automatically.
 
-## Status
+## Network
 
-Status shows:
+The `Net` page is for safe diagnostics on your own device and network.
+
+It shows:
 
 - Wi-Fi state
 - Signal strength
 - Local IP address
-- Uptime
-- Last sync time
+- Gateway and DNS information
+- Common gateway services such as DNS, HTTP, HTTPS, or SSH when reachable
+- Nearby 2.4 GHz Wi-Fi networks with RSSI, channel, and security type
 
-Use it when debugging network or API updates.
+Tap the IP/gateway card to refresh common service checks. Tap the Wi-Fi scan card to rescan nearby networks. ESP32 boards only scan 2.4 GHz Wi-Fi; 5 GHz-only networks will not appear.
+
+To connect to another Wi-Fi network, open Setup and tap Wi-Fi to start the `Deskbuddy Setup` portal. Choose the SSID and type the password in the browser portal.
 
 ## Setup
 

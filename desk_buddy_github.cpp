@@ -116,8 +116,8 @@ String regionFormatKey = "europe"; // europe = 24h + dd.mm.yyyy, us = 12h + mm/d
 // =========================================================
 const int SCREEN_W = 240;
 const int SCREEN_H = 320;
-const int TOPBAR_H = 34;
-const int NAV_H    = 44;
+const int TOPBAR_H = 18;
+const int NAV_H    = 28;
 
 const int HOME_GRID_Y1 = 120;
 const int HOME_GRID_Y2 = 198;
@@ -191,6 +191,7 @@ const int NAV_COUNT = 5;
 
 Page currentPage = PAGE_HOME;
 Page lastDrawnPage = (Page)-1;
+bool navExpanded = false;
 
 unsigned long lastClockTick = 0;
 unsigned long lastDataTick  = 0;
@@ -247,6 +248,23 @@ String lastNetworkToggleText = "";
 String lastSettingsText = "";
 String lastInsightText = "";
 String lastWeatherPanelText = "";
+String lastNetworkPanelText = "";
+
+struct WifiScanItem {
+  String ssid;
+  int32_t rssi;
+  int32_t channel;
+  wifi_auth_mode_t auth;
+};
+
+const int WIFI_SCAN_MAX = 6;
+WifiScanItem wifiScanItems[WIFI_SCAN_MAX];
+int wifiScanCount = 0;
+unsigned long lastWifiScanMs = 0;
+bool wifiScanBusy = false;
+
+String gatewayServiceText = "Tap scan";
+String gatewayServiceHost = "";
 
 const char* homeWidgetKey(HomeWidgetType type) {
   switch (type) {
@@ -487,6 +505,38 @@ static String signalText() {
 static String ipText() {
   if (!wifiEnabled || WiFi.status() != WL_CONNECTED) return "-";
   return WiFi.localIP().toString();
+}
+
+static String gatewayText() {
+  if (!wifiEnabled || WiFi.status() != WL_CONNECTED) return "-";
+  return WiFi.gatewayIP().toString();
+}
+
+static String dnsText() {
+  if (!wifiEnabled || WiFi.status() != WL_CONNECTED) return "-";
+  return WiFi.dnsIP().toString();
+}
+
+static String subnetText() {
+  if (!wifiEnabled || WiFi.status() != WL_CONNECTED) return "-";
+  IPAddress ip = WiFi.localIP();
+  IPAddress mask = WiFi.subnetMask();
+  IPAddress net((uint8_t)(ip[0] & mask[0]), (uint8_t)(ip[1] & mask[1]), (uint8_t)(ip[2] & mask[2]), (uint8_t)(ip[3] & mask[3]));
+  return net.toString() + "/" + mask.toString();
+}
+
+static String authModeText(wifi_auth_mode_t auth) {
+  switch (auth) {
+    case WIFI_AUTH_OPEN: return "Open";
+    case WIFI_AUTH_WEP: return "WEP";
+    case WIFI_AUTH_WPA_PSK: return "WPA";
+    case WIFI_AUTH_WPA2_PSK: return "WPA2";
+    case WIFI_AUTH_WPA_WPA2_PSK: return "WPA/WPA2";
+    case WIFI_AUTH_WPA2_ENTERPRISE: return "WPA2-E";
+    case WIFI_AUTH_WPA3_PSK: return "WPA3";
+    case WIFI_AUTH_WPA2_WPA3_PSK: return "WPA2/3";
+    default: return "Sec";
+  }
 }
 
 static bool useUsRegionFormat() {
@@ -1601,6 +1651,49 @@ void ensureKpIndex() {
   }
 }
 
+void scanWifiNetworksNow() {
+  if (wifiScanBusy) return;
+  wifiScanBusy = true;
+  wifiScanCount = 0;
+  int found = WiFi.scanNetworks(false, true);
+  if (found > 0) {
+    wifiScanCount = min(found, WIFI_SCAN_MAX);
+    for (int i = 0; i < wifiScanCount; i++) {
+      wifiScanItems[i].ssid = WiFi.SSID(i);
+      wifiScanItems[i].rssi = WiFi.RSSI(i);
+      wifiScanItems[i].channel = WiFi.channel(i);
+      wifiScanItems[i].auth = WiFi.encryptionType(i);
+    }
+  }
+  WiFi.scanDelete();
+  lastWifiScanMs = millis();
+  wifiScanBusy = false;
+  lastNetworkPanelText = "";
+  pageDirty = true;
+}
+
+String detectGatewayServices() {
+  if (!wifiEnabled || WiFi.status() != WL_CONNECTED) return "Offline";
+  IPAddress gw = WiFi.gatewayIP();
+  gatewayServiceHost = gw.toString();
+  const int ports[] = {53, 80, 443, 22};
+  const char* names[] = {"DNS", "HTTP", "HTTPS", "SSH"};
+  String result = "";
+  WiFiClient client;
+  client.setTimeout(120);
+  for (int i = 0; i < 4; i++) {
+    if (client.connect(gw, ports[i], 120)) {
+      if (result.length() > 0) result += " ";
+      result += names[i];
+      result += ":";
+      result += String(ports[i]);
+      client.stop();
+    }
+  }
+  if (result.length() == 0) result = "No common ports";
+  return result;
+}
+
 // =========================================================
 // DRAW HELPERS
 // =========================================================
@@ -1614,34 +1707,26 @@ void drawTopBar(const String& title) {
   tft.drawFastHLine(0, TOPBAR_H - 1, SCREEN_W, COL_STROKE);
 
   tft.setTextDatum(TL_DATUM);
-  tft.setTextColor(COL_TEXT, COL_PANEL_ALT);
-  tft.drawString(title, 10, 9, 2);
-
-  const int bs = 25;
-  const int bx = SCREEN_W - bs - 6;
-  const int by = 4;
-
-  uint16_t bg = (sleepDimmed || sleepOff) ? COL_ACCENT : COL_PANEL;
-  uint16_t fg = (sleepDimmed || sleepOff) ? TFT_BLACK : COL_TEXT;
-
-  tft.fillRoundRect(bx, by, bs, bs, 7, bg);
-  tft.drawRoundRect(bx, by, bs, bs, 7, COL_ACCENT);
-
-  const int cx = bx + 12;
-  const int cy = by + 12;
-
-  tft.drawCircle(cx, cy + 1, 6, fg);
-  tft.drawFastHLine(cx - 4, cy - 5, 9, bg);
-  tft.drawFastVLine(cx, cy - 7, 6, fg);
+  tft.setTextColor(COL_DIM, COL_PANEL_ALT);
+  tft.drawString(title.substring(0, 18), 8, 4, 1);
+  tft.setTextColor(statusColor(), COL_PANEL_ALT);
+  tft.drawRightString(wifiStatusText().c_str(), 232, 4, 1);
 }
 
 void drawNavBar() {
   const int y = SCREEN_H - NAV_H;
+  if (!navExpanded) {
+    tft.fillRect(0, SCREEN_H - 9, SCREEN_W, 9, COL_PANEL_ALT);
+    tft.drawFastHLine(0, SCREEN_H - 10, SCREEN_W, COL_STROKE);
+    tft.fillRoundRect(88, SCREEN_H - 6, 64, 3, 2, COL_DIM);
+    return;
+  }
+
   tft.fillRect(0, y, SCREEN_W, NAV_H, COL_PANEL_ALT);
   tft.drawFastHLine(0, y, SCREEN_W, COL_STROKE);
 
   const int btnW = SCREEN_W / NAV_COUNT;
-  const char* names[NAV_COUNT] = {"Home", "Wx", "Notes", "Status", "Setup"};
+  const char* names[NAV_COUNT] = {"Home", "Wx", "Notes", "Net", "Setup"};
 
   for (int i = 0; i < NAV_COUNT; i++) {
     int bx = i * btnW;
@@ -1650,8 +1735,8 @@ void drawNavBar() {
     uint16_t bg = active ? COL_ACCENT : COL_PANEL;
     uint16_t fg = active ? TFT_BLACK : COL_TEXT;
 
-    tft.fillRoundRect(bx + 4, y + 6, btnW - 8, NAV_H - 12, 8, bg);
-    tft.drawRoundRect(bx + 4, y + 6, btnW - 8, NAV_H - 12, 8, active ? COL_ACCENT : COL_STROKE);
+    tft.fillRoundRect(bx + 4, y + 4, btnW - 8, NAV_H - 8, 7, bg);
+    tft.drawRoundRect(bx + 4, y + 4, btnW - 8, NAV_H - 8, 7, active ? COL_ACCENT : COL_STROKE);
 
     tft.setTextDatum(MC_DATUM);
     tft.setTextColor(fg, bg);
@@ -2658,83 +2743,68 @@ void updateNotesDynamic() {
 
 void drawStatusPageFull() {
   tft.fillScreen(COL_BG);
-  drawTopBar("Status");
+  drawTopBar("Network");
   drawNavBar();
 
-  drawCard(8, PAGE_ROW1_Y, 108, PAGE_WIDGET_H, true);
-  drawCard(124, PAGE_ROW1_Y, 108, PAGE_WIDGET_H, true);
-  drawCard(8, PAGE_ROW2_Y, 224, PAGE_WIDGET_H, true);
-  drawCard(8, PAGE_ROW3_Y, 108, PAGE_WIDGET_H, true);
-  drawCard(124, PAGE_ROW3_Y, 108, PAGE_WIDGET_H, true);
+  drawCard(8, 24, 224, 58, true);
+  drawCard(8, 88, 224, 54, true);
+  drawCard(8, 148, 224, 132, true);
 
   pageDirty = false;
   lastDrawnPage = PAGE_STATUS;
 
-  lastWifiText = "";
-  lastSignalText = "";
-  lastIpText = "";
-  lastUptimeText = "";
-  lastNetworkToggleText = "";
+  lastNetworkPanelText = "";
 }
 
 void updateStatusDynamic() {
-  String w = wifiStatusText();
-  if (w != lastWifiText) {
-    tft.fillRect(18, PAGE_ROW1_Y + 24, 88, 30, COL_PANEL);
-    tft.setTextColor(COL_DIM, COL_PANEL);
-    tft.drawString("WiFi", 18, PAGE_ROW1_Y + 8, 2);
-    tft.setTextColor(statusColor(), COL_PANEL);
-    tft.drawString(w, 18, PAGE_ROW1_Y + 32, 2);
-    lastWifiText = w;
+  String key = wifiStatusText() + "|" + signalText() + "|" + ipText() + "|" + gatewayText() + "|" +
+               dnsText() + "|" + gatewayServiceText + "|" + String(wifiScanCount) + "|" + String(wifiEnabled ? 1 : 0);
+  for (int i = 0; i < wifiScanCount; i++) {
+    key += "|" + wifiScanItems[i].ssid + ":" + String(wifiScanItems[i].rssi) + ":" + String(wifiScanItems[i].channel);
   }
+  if (key == lastNetworkPanelText) return;
+  lastNetworkPanelText = key;
 
-  String s = signalText();
-  if (s != lastSignalText) {
-    tft.fillRect(134, PAGE_ROW1_Y + 30, 88, 24, COL_PANEL);
-    tft.setTextColor(COL_DIM, COL_PANEL);
-    tft.drawString("Signal", 134, PAGE_ROW1_Y + 8, 2);
+  tft.fillRect(18, 32, 204, 40, COL_PANEL);
+  tft.setTextColor(COL_DIM, COL_PANEL);
+  tft.drawString("Connection", 18, 31, 1);
+  tft.setTextColor(statusColor(), COL_PANEL);
+  tft.drawString(wifiStatusText(), 18, 46, 2);
+  tft.setTextColor(COL_TEXT, COL_PANEL);
+  tft.drawRightString(signalText().c_str(), 222, 46, 2);
+  tft.setTextColor(COL_DIM, COL_PANEL);
+  tft.drawString(WiFi.status() == WL_CONNECTED ? WiFi.SSID().substring(0, 20) : "Tap WiFi setup to connect", 18, 65, 1);
+
+  tft.fillRect(18, 96, 204, 36, COL_PANEL);
+  tft.setTextColor(COL_DIM, COL_PANEL);
+  tft.drawString("IP", 18, 96, 1);
+  tft.drawString("GW", 126, 96, 1);
+  tft.setTextColor(COL_TEXT, COL_PANEL);
+  tft.drawString(ipText(), 18, 111, 1);
+  tft.drawString(gatewayText(), 126, 111, 1);
+  tft.setTextColor(COL_ACCENT, COL_PANEL);
+  tft.drawString(gatewayServiceText.substring(0, 31), 18, 128, 1);
+
+  tft.fillRect(18, 156, 204, 112, COL_PANEL);
+  tft.setTextColor(COL_DIM, COL_PANEL);
+  tft.drawString("WiFi scan 2.4GHz", 18, 156, 1);
+  tft.setTextColor(COL_ACCENT, COL_PANEL);
+  tft.drawRightString("Tap to rescan", 222, 156, 1);
+  if (wifiScanCount == 0) {
     tft.setTextColor(COL_TEXT, COL_PANEL);
-    tft.drawString(s, 134, PAGE_ROW1_Y + 30, 4);
-    lastSignalText = s;
-  }
-
-  String ip = ipText();
-  if (ip != lastIpText) {
-    tft.fillRect(18, PAGE_ROW2_Y + 30, 200, 18, COL_PANEL);
-    tft.setTextColor(COL_DIM, COL_PANEL);
-    tft.drawString("IP address", 18, PAGE_ROW2_Y + 8, 2);
-    tft.setTextColor(COL_TEXT, COL_PANEL);
-    tft.drawString(ip, 18, PAGE_ROW2_Y + 30, 2);
-    lastIpText = ip;
-  }
-
-  String up = uptimeText();
-  String upCombined = up + "|" + lastSyncText();
-  if (upCombined != lastUptimeText) {
-    tft.fillRect(18, PAGE_ROW3_Y + 26, 88, 26, COL_PANEL);
-    tft.setTextColor(COL_DIM, COL_PANEL);
-    tft.drawString("Uptime", 18, PAGE_ROW3_Y + 10, 2);
-    tft.setTextColor(COL_TEXT, COL_PANEL);
-    tft.drawString(up, 18, PAGE_ROW3_Y + 26, 2);
-    tft.setTextColor(COL_DIM, COL_PANEL);
-    tft.drawString(lastSyncText(), 18, PAGE_ROW3_Y + 42, 1);
-    lastUptimeText = upCombined;
-  }
-
-  String networkLabel = wifiEnabled ? "Enabled" : "Disabled";
-  if (networkLabel != lastNetworkToggleText) {
-    uint16_t btnBg = wifiEnabled ? COL_ACCENT : COL_PANEL_ALT;
-    uint16_t btnFg = wifiEnabled ? TFT_BLACK : COL_TEXT;
-    uint16_t btnStroke = wifiEnabled ? COL_ACCENT : COL_STROKE;
-
-    tft.fillRect(132, PAGE_ROW3_Y + 8, 92, 42, COL_PANEL);
-    tft.setTextColor(COL_DIM, COL_PANEL);
-    tft.drawString("Network", 134, PAGE_ROW3_Y + 10, 2);
-    tft.fillRoundRect(134, PAGE_ROW3_Y + 30, 88, 22, 8, btnBg);
-    tft.drawRoundRect(134, PAGE_ROW3_Y + 30, 88, 22, 8, btnStroke);
-    tft.setTextColor(btnFg, btnBg);
-    tft.drawCentreString(networkLabel.c_str(), 178, PAGE_ROW3_Y + 32, 2);
-    lastNetworkToggleText = networkLabel;
+    tft.drawString("No scan yet", 18, 178, 2);
+  } else {
+    for (int i = 0; i < wifiScanCount; i++) {
+      int y = 176 + i * 15;
+      uint16_t rowColor = wifiScanItems[i].rssi > -60 ? COL_GREEN : (wifiScanItems[i].rssi > -75 ? COL_YELLOW : COL_DIM);
+      tft.setTextColor(rowColor, COL_PANEL);
+      tft.drawString(String(wifiScanItems[i].rssi), 18, y, 1);
+      tft.setTextColor(COL_TEXT, COL_PANEL);
+      tft.drawString(wifiScanItems[i].ssid.substring(0, 17), 52, y, 1);
+      tft.setTextColor(COL_DIM, COL_PANEL);
+      String meta = "ch" + String(wifiScanItems[i].channel) + " " + authModeText(wifiScanItems[i].auth);
+      tft.drawRightString(meta.c_str(), 222, y, 1);
+    }
   }
 }
 
@@ -2982,8 +3052,15 @@ bool handleTimerDoneDialogTouch(int x, int y) {
 bool handleStatusTouch(int x, int y) {
   if (currentPage != PAGE_STATUS) return false;
 
-  if (x >= 124 && x < 232 && y >= 198 && y < 268) {
-    setWifiEnabled(!wifiEnabled);
+  if (x >= 8 && x < 232 && y >= 88 && y < 142) {
+    gatewayServiceText = detectGatewayServices();
+    lastNetworkPanelText = "";
+    pageDirty = true;
+    return true;
+  }
+
+  if (x >= 8 && x < 232 && y >= 148 && y < 280) {
+    scanWifiNetworksNow();
     return true;
   }
 
@@ -3043,14 +3120,22 @@ bool handleSettingsTouch(int x, int y) {
 // =========================================================
 void handleNavTouch(int x, int y) {
   if (y < SCREEN_H - NAV_H) return;
+  if (!navExpanded) {
+    navExpanded = true;
+    pageDirty = true;
+    return;
+  }
 
   int btnW = SCREEN_W / NAV_COUNT;
   int idx = x / btnW;
   if (idx < 0 || idx >= NAV_COUNT) return;
 
   Page newPage = (Page)idx;
+  navExpanded = false;
   if (newPage != currentPage) {
     currentPage = newPage;
+    pageDirty = true;
+  } else {
     pageDirty = true;
   }
 }
@@ -3682,22 +3767,17 @@ void loop() {
       return;
     }
 
-    if (tx >= SCREEN_W - 36 && ty <= TOPBAR_H) {
-      toggleSleepMode();
-      pageDirty = true;
-    } else {
-      if (sleepDimmed) {
-        if (!manualDimMode) {
-          wakeDisplay();
-        } else {
-          if (!handleHomeTouch(tx, ty) && !handleNotesTouch(tx, ty) && !handleStatusTouch(tx, ty) && !handleSettingsTouch(tx, ty)) {
-            handleNavTouch(tx, ty);
-          }
-        }
+    if (sleepDimmed) {
+      if (!manualDimMode) {
+        wakeDisplay();
       } else {
         if (!handleHomeTouch(tx, ty) && !handleNotesTouch(tx, ty) && !handleStatusTouch(tx, ty) && !handleSettingsTouch(tx, ty)) {
           handleNavTouch(tx, ty);
         }
+      }
+    } else {
+      if (!handleHomeTouch(tx, ty) && !handleNotesTouch(tx, ty) && !handleStatusTouch(tx, ty) && !handleSettingsTouch(tx, ty)) {
+        handleNavTouch(tx, ty);
       }
     }
   }

@@ -25,7 +25,8 @@ If the screen stays white, replace the installed TFT_eSPI `User_Setup.h` with th
 
 ## Features
 
-- Minimal touch UI with Home, Weather, Notes, Status, and Setup pages
+- Minimal touch UI with Home, Weather, Notes, Network, and Setup pages
+- More usable screen space with a compact top status strip and slimmer bottom navigation
 - Redesigned Home page with clock, weather, focus, note, and scrolling live ticker
 - Show Mode on Home with rotating large-format slides for clock, weather, focus, checklist, live briefing, and daily psalm
 - Apple-inspired Weather page with current conditions, drawn weather icons, hourly forecast, and 7-day forecast
@@ -35,12 +36,15 @@ If the screen stays white, replace the installed TFT_eSPI `User_Setup.h` with th
 - Live ticker/card with quotes, technology headlines, or mixed rotation with local fallback
 - Daily local Bible reflection with psalm/verse reference and short prompt, available without internet
 - On-device Setup page for brightness, city presets, live content mode, and Wi-Fi portal
+- Network diagnostics page with Wi-Fi scan, RSSI, channel/security, IP, gateway, DNS, and common gateway service checks
 - Local browser settings page after the board joins Wi-Fi
 - Open-Meteo weather, hourly forecast, daily forecast, wind, UV, and rain probability
 - Sunrise and sunset from sunrise-sunset.org
 - KP index from NOAA
 - GitHub Actions firmware build
 - GitHub Pages installer using ESP Web Tools
+
+Deskbuddy intentionally keeps network tools defensive: it can inspect nearby 2.4 GHz Wi-Fi networks and the network it is connected to, but it does not include deauth, handshake capture, packet sniffing, or password attack features.
 
 ## Install From Browser
 
