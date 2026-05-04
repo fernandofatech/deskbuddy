@@ -36,14 +36,14 @@ Weather data comes from Open-Meteo.
 
 ## Notes
 
-Use Notes for short reminders that should stay visible during the day, such as:
+Use Notes for a touch checklist and short reminders that should stay visible during the day, such as:
 
 - Today's priority
 - Meeting prep reminder
 - A shopping or errand note
 - A deployment checklist
 
-The live card below Notes can show quotes, technology headlines, or a mixed rotation. If public APIs fail, Deskbuddy keeps a local fallback message visible and retries automatically.
+Edit checklist labels in the browser settings page, then tap rows on the device to mark them done. The live card below the checklist can show quotes, technology headlines, or a mixed rotation. If public APIs fail, Deskbuddy keeps a local fallback message visible and retries automatically.
 
 ## Status
 

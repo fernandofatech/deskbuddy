@@ -146,6 +146,14 @@ const int PAGE_WIDGET_H = HOME_WIDGET_H;
 String notesText = "No notes yet.";
 bool notesDirty = true;
 String buddyNickname = "";
+const int CHECKLIST_COUNT = 4;
+String checklistItems[CHECKLIST_COUNT] = {
+  "Review today's priority",
+  "Check calendar",
+  "Plan next focus block",
+  "Wrap up notes"
+};
+bool checklistDone[CHECKLIST_COUNT] = {false, false, false, false};
 
 enum HomeWidgetType {
   HOME_WIDGET_WEEK = 0,
@@ -229,6 +237,7 @@ String lastWindDirText = "";
 String lastNextSunLabel = "";
 String lastNextSunTime = "";
 String lastNotesText = "";
+String lastChecklistText = "";
 String lastNetworkToggleText = "";
 String lastSettingsText = "";
 String lastInsightText = "";
@@ -1064,6 +1073,16 @@ void loadStoredSettings() {
     prefs.putInt("liveSchema", 1);
   }
 
+  for (int i = 0; i < CHECKLIST_COUNT; i++) {
+    String textKey = String("checkText") + String(i);
+    String doneKey = String("checkDone") + String(i);
+    checklistItems[i] = prefs.getString(textKey.c_str(), checklistItems[i]);
+    checklistItems[i].trim();
+    if (checklistItems[i].length() == 0) checklistItems[i] = "Task " + String(i + 1);
+    if (checklistItems[i].length() > 40) checklistItems[i] = checklistItems[i].substring(0, 40);
+    checklistDone[i] = prefs.getBool(doneKey.c_str(), checklistDone[i]);
+  }
+
   for (int i = 0; i < HOME_SLOT_COUNT; i++) {
     String key = String("homeSlot") + String(i);
     homeWidgetSlots[i] = homeWidgetFromKey(prefs.getString(key.c_str(), homeWidgetKey(homeWidgetSlots[i])));
@@ -1365,20 +1384,6 @@ bool httpGetJson(const String& url, JsonDocument& doc) {
 bool fetchQuoteInsight() {
   {
     DynamicJsonDocument doc(3072);
-    if (httpGetJson("https://api.quotable.io/random?maxLength=140", doc)) {
-      const char* content = doc["content"] | nullptr;
-      const char* author = doc["author"] | "Unknown";
-      if (content) {
-        insightTitle = String(author);
-        insightBody = String(content);
-        insightSource = "Quotable";
-        return true;
-      }
-    }
-  }
-
-  {
-    DynamicJsonDocument doc(3072);
     if (httpGetJson("https://zenquotes.io/api/random", doc)) {
       JsonArray arr = doc.as<JsonArray>();
       if (arr && arr.size() > 0) {
@@ -1395,7 +1400,21 @@ bool fetchQuoteInsight() {
   }
 
   {
-    DynamicJsonDocument doc(2048);
+    DynamicJsonDocument doc(3072);
+    if (httpGetJson("https://api.quotable.io/random?maxLength=140", doc)) {
+      const char* content = doc["content"] | nullptr;
+      const char* author = doc["author"] | "Unknown";
+      if (content) {
+        insightTitle = String(author);
+        insightBody = String(content);
+        insightSource = "Quotable";
+        return true;
+      }
+    }
+  }
+
+  {
+    DynamicJsonDocument doc(3072);
     if (httpGetJson("https://api.adviceslip.com/advice", doc)) {
       const char* advice = doc["slip"]["advice"] | nullptr;
       if (advice) {
@@ -1448,7 +1467,7 @@ bool fetchInsight() {
   if (!ok && contentMode == "mix") ok = fetchTech ? fetchQuoteInsight() : fetchTechInsight();
   if (!ok) {
     insightFailureCount++;
-    if (insightFailureCount >= 2 || insightBody.length() == 0) setLocalInsightFallback();
+    if (insightFailureCount >= 1 || insightBody.length() == 0 || insightSource == "Local") setLocalInsightFallback();
     insightStatus = "Live fetch failed; retrying";
     notesDirty = true;
     pageDirty = true;
@@ -2281,37 +2300,56 @@ void drawNotesPageFull() {
   drawTopBar("Notes");
   drawNavBar();
 
-  drawCard(8, 40, 224, 128, true);
-  drawCard(8, 176, 224, 96, false);
+  drawCard(8, 40, 224, 126, true);
+  drawCard(8, 174, 224, 98, false);
 
   pageDirty = false;
   lastDrawnPage = PAGE_NOTES;
   lastNotesText = "";
+  lastChecklistText = "";
   lastInsightText = "";
 }
 
 void updateNotesDynamic() {
   String insightKey = insightTitle + "|" + insightBody + "|" + insightSource + "|" + insightStatus;
-  if (notesText != lastNotesText || insightKey != lastInsightText || notesDirty) {
-    tft.fillRect(18, 188, 204, 70, COL_PANEL);
-    tft.setTextColor(COL_DIM, COL_PANEL);
-    tft.drawString("Quick note", 18, 188, 2);
-    drawWrappedTextLimited(18, 210, 198, notesText, 2, COL_TEXT, COL_PANEL, 3);
+  String checklistKey = "";
+  for (int i = 0; i < CHECKLIST_COUNT; i++) {
+    checklistKey += String(checklistDone[i] ? 1 : 0) + checklistItems[i] + "|";
+  }
 
-    tft.fillRect(18, 52, 204, 102, COL_PANEL);
+  if (checklistKey != lastChecklistText || notesDirty) {
+    tft.fillRect(18, 52, 204, 100, COL_PANEL);
     tft.setTextColor(COL_DIM, COL_PANEL);
-    tft.drawString("Live card", 18, 52, 1);
+    tft.drawString("Checklist", 18, 52, 2);
+    for (int i = 0; i < CHECKLIST_COUNT; i++) {
+      int y = 76 + i * 18;
+      uint16_t boxColor = checklistDone[i] ? COL_ACCENT : COL_STROKE;
+      tft.drawRoundRect(18, y, 12, 12, 3, boxColor);
+      if (checklistDone[i]) {
+        tft.drawLine(21, y + 6, 24, y + 9, COL_ACCENT);
+        tft.drawLine(24, y + 9, 29, y + 3, COL_ACCENT);
+      }
+      tft.setTextColor(checklistDone[i] ? COL_DIM : COL_TEXT, COL_PANEL);
+      tft.drawString(checklistItems[i].substring(0, 28), 36, y - 1, 1);
+    }
+    lastChecklistText = checklistKey;
+  }
+
+  if (notesText != lastNotesText || insightKey != lastInsightText || notesDirty) {
+    tft.fillRect(18, 186, 204, 72, COL_PANEL);
+    tft.setTextColor(COL_DIM, COL_PANEL);
+    tft.drawString("Live", 18, 186, 1);
     tft.setTextColor(COL_ACCENT, COL_PANEL);
-    tft.drawString(insightTitle.substring(0, 26), 18, 68, 2);
-    drawWrappedTextLimited(18, 92, 198, insightBody, 2, COL_TEXT, COL_PANEL, 4);
+    tft.drawString(insightTitle.substring(0, 24), 18, 200, 2);
+    drawWrappedTextLimited(18, 222, 198, insightBody, 1, COL_TEXT, COL_PANEL, 2);
     tft.setTextColor(COL_DIM, COL_PANEL);
-    tft.drawString(insightSource.substring(0, 18), 18, 150, 1);
-    tft.drawRightString(insightStatus.substring(0, 20).c_str(), 222, 150, 1);
+    tft.drawString(insightSource.substring(0, 18), 18, 256, 1);
+    tft.drawRightString(insightStatus.substring(0, 20).c_str(), 222, 256, 1);
 
     lastNotesText = notesText;
     lastInsightText = insightKey;
-    notesDirty = false;
   }
+  notesDirty = false;
 }
 
 void drawStatusPageFull() {
@@ -2640,6 +2678,25 @@ bool handleStatusTouch(int x, int y) {
   return false;
 }
 
+bool handleNotesTouch(int x, int y) {
+  if (currentPage != PAGE_NOTES) return false;
+
+  for (int i = 0; i < CHECKLIST_COUNT; i++) {
+    int rowY = 72 + i * 18;
+    if (x >= 8 && x < 232 && y >= rowY && y < rowY + 18) {
+      checklistDone[i] = !checklistDone[i];
+      String doneKey = String("checkDone") + String(i);
+      prefs.putBool(doneKey.c_str(), checklistDone[i]);
+      lastChecklistText = "";
+      notesDirty = true;
+      pageDirty = true;
+      return true;
+    }
+  }
+
+  return false;
+}
+
 bool handleSettingsTouch(int x, int y) {
   if (currentPage != PAGE_SETTINGS) return false;
 
@@ -2791,6 +2848,18 @@ void handleRoot() {
   page += "<textarea name='notes' maxlength='700'>";
   page += htmlEscape(notesText);
   page += "</textarea>";
+  page += "<div class='settings-block'>";
+  page += "<span class='settings-title'>Touch checklist</span>";
+  page += "<div class='settings-desc'>Edit the labels here, then tap each row on the device to mark it done.</div>";
+  page += "<div class='grid'>";
+  for (int i = 0; i < CHECKLIST_COUNT; i++) {
+    page += "<div><label class='label'>Item " + String(i + 1) + "</label>";
+    page += "<input name='checkText" + String(i) + "' maxlength='40' value='" + htmlEscape(checklistItems[i]) + "'>";
+    page += "<label style='display:flex;align-items:center;gap:8px;margin-top:8px;color:#a0aec0;font-size:13px;'>";
+    page += "<input style='width:auto;' type='checkbox' name='checkDone" + String(i) + "'" + String(checklistDone[i] ? " checked" : "") + "> Done";
+    page += "</label></div>";
+  }
+  page += "</div></div>";
   page += "<div class='muted'>Saved notes show up right away.</div>";
   page += "</div></div>";
 
@@ -2984,6 +3053,17 @@ void handleSave() {
   newNotes.trim();
   newLoc.trim();
   newNickname.trim();
+  String newChecklistItems[CHECKLIST_COUNT];
+  bool newChecklistDone[CHECKLIST_COUNT];
+  for (int i = 0; i < CHECKLIST_COUNT; i++) {
+    String textKey = String("checkText") + String(i);
+    String doneKey = String("checkDone") + String(i);
+    newChecklistItems[i] = server.hasArg(textKey) ? server.arg(textKey) : checklistItems[i];
+    newChecklistItems[i].trim();
+    if (newChecklistItems[i].length() == 0) newChecklistItems[i] = "Task " + String(i + 1);
+    if (newChecklistItems[i].length() > 40) newChecklistItems[i] = newChecklistItems[i].substring(0, 40);
+    newChecklistDone[i] = server.hasArg(doneKey);
+  }
 
   if (newNotes.length() == 0) newNotes = "No notes yet.";
   if (newNotes.length() > 700) newNotes = newNotes.substring(0, 700);
@@ -3004,6 +3084,10 @@ void handleSave() {
     (newLoc != locationName);
 
   notesText = newNotes;
+  for (int i = 0; i < CHECKLIST_COUNT; i++) {
+    checklistItems[i] = newChecklistItems[i];
+    checklistDone[i] = newChecklistDone[i];
+  }
   buddyNickname = newNickname;
   locationName = newLoc;
   LAT = newLat;
@@ -3024,6 +3108,12 @@ void handleSave() {
   }
 
   prefs.putString("notes", notesText);
+  for (int i = 0; i < CHECKLIST_COUNT; i++) {
+    String textKey = String("checkText") + String(i);
+    String doneKey = String("checkDone") + String(i);
+    prefs.putString(textKey.c_str(), checklistItems[i]);
+    prefs.putBool(doneKey.c_str(), checklistDone[i]);
+  }
   prefs.putString("accent", newAccent);
   prefs.putString("bg", newBg);
   prefs.putString("text", newText);
@@ -3076,6 +3166,8 @@ void handleSave() {
 
   if (locationChanged) resetDataCaches();
   lastInsightFetch = 0;
+  lastInsightAttempt = 0;
+  insightFailureCount = 0;
   lastInsightText = "";
   ensureInsight();
 
@@ -3282,12 +3374,12 @@ void loop() {
         if (!manualDimMode) {
           wakeDisplay();
         } else {
-          if (!handleHomeTouch(tx, ty) && !handleStatusTouch(tx, ty) && !handleSettingsTouch(tx, ty)) {
+          if (!handleHomeTouch(tx, ty) && !handleNotesTouch(tx, ty) && !handleStatusTouch(tx, ty) && !handleSettingsTouch(tx, ty)) {
             handleNavTouch(tx, ty);
           }
         }
       } else {
-        if (!handleHomeTouch(tx, ty) && !handleStatusTouch(tx, ty) && !handleSettingsTouch(tx, ty)) {
+        if (!handleHomeTouch(tx, ty) && !handleNotesTouch(tx, ty) && !handleStatusTouch(tx, ty) && !handleSettingsTouch(tx, ty)) {
           handleNavTouch(tx, ty);
         }
       }
