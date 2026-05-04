@@ -403,12 +403,16 @@ static int lastSunYmd = -1;
 static time_t lastSyncTime = 0;
 
 // Public content
-String contentMode = "quote"; // quote, tech, off
+String contentMode = "mix"; // mix, quote, tech, off
 String insightTitle = "Deskbuddy";
 String insightBody = "Tap Setup to choose quotes, tech headlines, city, Wi-Fi, and brightness.";
 String insightSource = "Local";
+String insightStatus = "Waiting for Wi-Fi";
 static time_t lastInsightFetch = 0;
+static time_t lastInsightAttempt = 0;
+static int insightFailureCount = 0;
 static const uint32_t INSIGHT_INTERVAL_SEC = 60 * 60;
+static const uint32_t INSIGHT_RETRY_SEC = 5 * 60;
 
 // =========================================================
 // SLEEP / BACKLIGHT
@@ -720,6 +724,9 @@ static String accentPreviewCss(const String& key) {
 }
 
 static String themePreviewCss(const String& key) {
+  if (key == "platinum") return cssColorFrom565(0xD6BA);
+  if (key == "cupertino") return cssColorFrom565(0x0259);
+  if (key == "glass")    return cssColorFrom565(0x2945);
   if (key == "slate")    return cssColorFrom565(0x08A3);
   if (key == "deep")     return cssColorFrom565(0x0000);
   if (key == "nordic")   return cssColorFrom565(0x0864);
@@ -985,8 +992,14 @@ void applyThemeByKey(const String& accentKey, const String& bgKey) {
     COL_BG = 0x1004; COL_PANEL = 0x1886; COL_PANEL_ALT = 0x20E8; COL_STROKE = 0x41AC;
   } else if (bgKey == "ochre") {
     COL_BG = 0x20E1; COL_PANEL = 0x3184; COL_PANEL_ALT = 0x4226; COL_STROKE = 0x632B;
+  } else if (bgKey == "platinum") {
+    COL_BG = 0xD6BA; COL_PANEL = 0xEF7D; COL_PANEL_ALT = 0xC638; COL_STROKE = 0xA514;
+  } else if (bgKey == "cupertino") {
+    COL_BG = 0x0259; COL_PANEL = 0x0B1D; COL_PANEL_ALT = 0x123E; COL_STROKE = 0x3CDF;
+  } else if (bgKey == "glass") {
+    COL_BG = 0x18E3; COL_PANEL = 0x2945; COL_PANEL_ALT = 0x3186; COL_STROKE = 0x5AEB;
   } else {
-    COL_BG = 0x08A3; COL_PANEL = 0x1106; COL_PANEL_ALT = 0x18C7; COL_STROKE = 0x31EC;
+    COL_BG = 0x1082; COL_PANEL = 0x18C3; COL_PANEL_ALT = 0x2104; COL_STROKE = 0x4208;
   }
 }
 
@@ -1042,8 +1055,14 @@ void loadStoredSettings() {
   flashModeEnabled = prefs.getBool("flashMode", false);
   wifiEnabled      = prefs.getBool("wifiEnabled", true);
   BL_FULL          = constrain(prefs.getInt("brightness", 255), 30, 255);
-  contentMode      = prefs.getString("contentMode", "quote");
-  if (contentMode != "quote" && contentMode != "tech" && contentMode != "off") contentMode = "quote";
+  contentMode      = prefs.getString("contentMode", "mix");
+  if (contentMode != "mix" && contentMode != "quote" && contentMode != "tech" && contentMode != "off") contentMode = "mix";
+  int liveSchema = prefs.getInt("liveSchema", 0);
+  if (liveSchema < 1 && contentMode != "off") {
+    contentMode = "mix";
+    prefs.putString("contentMode", contentMode);
+    prefs.putInt("liveSchema", 1);
+  }
 
   for (int i = 0; i < HOME_SLOT_COUNT; i++) {
     String key = String("homeSlot") + String(i);
@@ -1080,6 +1099,7 @@ void resetDataCaches() {
   lastWeatherFetch = 0;
   lastKpFetch = 0;
   lastInsightFetch = 0;
+  lastInsightAttempt = 0;
   dataDirty = true;
   pageDirty = true;
 }
@@ -1321,18 +1341,15 @@ void ensureWeather() {
   }
 }
 
-bool fetchInsight() {
-  if (WiFi.status() != WL_CONNECTED || contentMode == "off") return false;
-
+bool httpGetJson(const String& url, JsonDocument& doc) {
   WiFiClientSecure client;
   client.setInsecure();
 
-  String url = contentMode == "tech"
-    ? "https://hn.algolia.com/api/v1/search_by_date?tags=story&query=technology"
-    : "https://api.quotable.io/random?maxLength=120";
-
   HTTPClient http;
   if (!http.begin(client, url)) return false;
+  http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
+  http.setTimeout(12000);
+  http.addHeader("User-Agent", "Deskbuddy ESP32");
 
   int code = http.GET();
   if (code != 200) {
@@ -1342,30 +1359,109 @@ bool fetchInsight() {
 
   String body = http.getString();
   http.end();
+  return deserializeJson(doc, body) == DeserializationError::Ok;
+}
 
-  DynamicJsonDocument doc(contentMode == "tech" ? 8192 : 2048);
-  if (deserializeJson(doc, body)) return false;
+bool fetchQuoteInsight() {
+  {
+    DynamicJsonDocument doc(3072);
+    if (httpGetJson("https://api.quotable.io/random?maxLength=140", doc)) {
+      const char* content = doc["content"] | nullptr;
+      const char* author = doc["author"] | "Unknown";
+      if (content) {
+        insightTitle = String(author);
+        insightBody = String(content);
+        insightSource = "Quotable";
+        return true;
+      }
+    }
+  }
 
-  if (contentMode == "tech") {
-    JsonArray hits = doc["hits"];
-    if (!hits || hits.size() == 0) return false;
-    const char* title = hits[0]["title"] | hits[0]["story_title"] | nullptr;
-    if (!title) return false;
-    insightTitle = "Tech pulse";
-    insightBody = String(title);
-    insightSource = "Hacker News";
-  } else {
-    const char* content = doc["content"] | nullptr;
-    const char* author = doc["author"] | "Unknown";
-    if (!content) return false;
-    insightTitle = String(author);
-    insightBody = String(content);
-    insightSource = "Quotable";
+  {
+    DynamicJsonDocument doc(3072);
+    if (httpGetJson("https://zenquotes.io/api/random", doc)) {
+      JsonArray arr = doc.as<JsonArray>();
+      if (arr && arr.size() > 0) {
+        const char* quote = arr[0]["q"] | nullptr;
+        const char* author = arr[0]["a"] | "Unknown";
+        if (quote) {
+          insightTitle = String(author);
+          insightBody = String(quote);
+          insightSource = "ZenQuotes";
+          return true;
+        }
+      }
+    }
+  }
+
+  {
+    DynamicJsonDocument doc(2048);
+    if (httpGetJson("https://api.adviceslip.com/advice", doc)) {
+      const char* advice = doc["slip"]["advice"] | nullptr;
+      if (advice) {
+        insightTitle = "Workday prompt";
+        insightBody = String(advice);
+        insightSource = "AdviceSlip";
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
+bool fetchTechInsight() {
+  DynamicJsonDocument doc(8192);
+  if (!httpGetJson("https://hn.algolia.com/api/v1/search_by_date?tags=story&query=technology", doc)) return false;
+
+  JsonArray hits = doc["hits"];
+  if (!hits || hits.size() == 0) return false;
+  const char* title = hits[0]["title"] | hits[0]["story_title"] | nullptr;
+  const char* author = hits[0]["author"] | "HN";
+  if (!title) return false;
+  insightTitle = "Tech pulse";
+  insightBody = String(title);
+  insightSource = String("Hacker News / ") + String(author);
+  return true;
+}
+
+void setLocalInsightFallback() {
+  const char* fallbackQuotes[] = {
+    "Focus on the next useful step.",
+    "Make the important thing easier to start.",
+    "Small improvements compound during a long workday.",
+    "Clear context beats a crowded dashboard."
+  };
+  int idx = (millis() / 1000UL) % 4;
+  insightTitle = "Deskbuddy";
+  insightBody = fallbackQuotes[idx];
+  insightSource = "Local fallback";
+}
+
+bool fetchInsight() {
+  if (WiFi.status() != WL_CONNECTED || contentMode == "off") return false;
+  lastInsightAttempt = time(nullptr);
+  bool fetchTech = contentMode == "tech" || (contentMode == "mix" && ((lastInsightAttempt / INSIGHT_RETRY_SEC) % 2 == 0));
+  insightStatus = fetchTech ? "Fetching tech news..." : "Fetching quote...";
+
+  bool ok = fetchTech ? fetchTechInsight() : fetchQuoteInsight();
+  if (!ok && contentMode == "mix") ok = fetchTech ? fetchQuoteInsight() : fetchTechInsight();
+  if (!ok) {
+    insightFailureCount++;
+    if (insightFailureCount >= 2 || insightBody.length() == 0) setLocalInsightFallback();
+    insightStatus = "Live fetch failed; retrying";
+    notesDirty = true;
+    pageDirty = true;
+    return false;
   }
 
   if (insightBody.length() > 180) insightBody = insightBody.substring(0, 177) + "...";
   lastInsightFetch = time(nullptr);
   lastSyncTime = lastInsightFetch;
+  insightFailureCount = 0;
+  struct tm tmInsight;
+  localtime_r(&lastInsightFetch, &tmInsight);
+  insightStatus = "Live updated " + formatClockParts(tmInsight, false);
   return true;
 }
 
@@ -1374,15 +1470,27 @@ void ensureInsight() {
     insightTitle = "Live card off";
     insightBody = "Enable quotes or tech headlines from Setup.";
     insightSource = "Local";
+    insightStatus = "Off";
     return;
   }
 
   time_t nowT = time(nullptr);
-  if ((lastInsightFetch == 0 || (nowT - lastInsightFetch) > INSIGHT_INTERVAL_SEC) &&
+  if (WiFi.status() != WL_CONNECTED) {
+    insightTitle = "Waiting for Wi-Fi";
+    insightBody = "Connect Wi-Fi to load quotes and tech news.";
+    insightSource = "Network";
+    insightStatus = "Offline";
+    return;
+  }
+
+  bool due = lastInsightFetch > 0 && (nowT - lastInsightFetch) > INSIGHT_INTERVAL_SEC;
+  bool retryDue = lastInsightFetch == 0 && (lastInsightAttempt == 0 || (nowT - lastInsightAttempt) > INSIGHT_RETRY_SEC);
+  if ((due || retryDue) &&
       WiFi.status() == WL_CONNECTED) {
     if (fetchInsight()) {
       notesDirty = true;
       dataDirty = true;
+      pageDirty = true;
     }
   }
 }
@@ -1897,7 +2005,7 @@ void drawHomeForecastCard(bool force = false) {
 
 void drawHomeTicker(bool force = false) {
   String ticker = homeTickerText();
-  String combined = ticker + "|" + String(COL_PANEL) + "|" + String(COL_TEXT) + "|" + String(COL_ACCENT);
+  String combined = ticker + "|" + insightStatus + "|" + String(COL_PANEL) + "|" + String(COL_TEXT) + "|" + String(COL_ACCENT);
   if (force || combined != cacheHomeTicker) {
     cacheHomeTicker = combined;
     homeTickerOffset = 0;
@@ -2173,8 +2281,8 @@ void drawNotesPageFull() {
   drawTopBar("Notes");
   drawNavBar();
 
-  drawCard(8, 42, 224, 104, true);
-  drawCard(8, 154, 224, 114, true);
+  drawCard(8, 40, 224, 128, true);
+  drawCard(8, 176, 224, 96, false);
 
   pageDirty = false;
   lastDrawnPage = PAGE_NOTES;
@@ -2183,19 +2291,22 @@ void drawNotesPageFull() {
 }
 
 void updateNotesDynamic() {
-  String insightKey = insightTitle + "|" + insightBody + "|" + insightSource;
+  String insightKey = insightTitle + "|" + insightBody + "|" + insightSource + "|" + insightStatus;
   if (notesText != lastNotesText || insightKey != lastInsightText || notesDirty) {
-    tft.fillRect(18, 54, 204, 78, COL_PANEL);
+    tft.fillRect(18, 188, 204, 70, COL_PANEL);
     tft.setTextColor(COL_DIM, COL_PANEL);
-    tft.drawString("Notes", 18, 54, 2);
-    drawWrappedTextLimited(18, 76, 198, notesText, 2, COL_TEXT, COL_PANEL, 4);
+    tft.drawString("Quick note", 18, 188, 2);
+    drawWrappedTextLimited(18, 210, 198, notesText, 2, COL_TEXT, COL_PANEL, 3);
 
-    tft.fillRect(18, 166, 204, 88, COL_PANEL);
-    tft.setTextColor(COL_ACCENT, COL_PANEL);
-    tft.drawString(insightTitle, 18, 166, 2);
-    drawWrappedTextLimited(18, 188, 198, insightBody, 2, COL_TEXT, COL_PANEL, 4);
+    tft.fillRect(18, 52, 204, 102, COL_PANEL);
     tft.setTextColor(COL_DIM, COL_PANEL);
-    tft.drawString(insightSource, 18, 246, 1);
+    tft.drawString("Live card", 18, 52, 1);
+    tft.setTextColor(COL_ACCENT, COL_PANEL);
+    tft.drawString(insightTitle.substring(0, 26), 18, 68, 2);
+    drawWrappedTextLimited(18, 92, 198, insightBody, 2, COL_TEXT, COL_PANEL, 4);
+    tft.setTextColor(COL_DIM, COL_PANEL);
+    tft.drawString(insightSource.substring(0, 18), 18, 150, 1);
+    tft.drawRightString(insightStatus.substring(0, 20).c_str(), 222, 150, 1);
 
     lastNotesText = notesText;
     lastInsightText = insightKey;
@@ -2286,6 +2397,7 @@ void updateStatusDynamic() {
 }
 
 String contentModeLabel() {
+  if (contentMode == "mix") return "Mix";
   if (contentMode == "tech") return "Tech";
   if (contentMode == "off") return "Off";
   return "Quote";
@@ -2315,11 +2427,14 @@ void applyCityPreset(int direction) {
 }
 
 void cycleContentMode() {
-  if (contentMode == "quote") contentMode = "tech";
+  if (contentMode == "mix") contentMode = "quote";
+  else if (contentMode == "quote") contentMode = "tech";
   else if (contentMode == "tech") contentMode = "off";
-  else contentMode = "quote";
+  else contentMode = "mix";
   prefs.putString("contentMode", contentMode);
   lastInsightFetch = 0;
+  lastInsightAttempt = 0;
+  insightFailureCount = 0;
   lastInsightText = "";
   notesDirty = true;
   pageDirty = true;
@@ -2350,7 +2465,7 @@ void drawSettingsPageFull() {
 }
 
 void updateSettingsDynamic() {
-  String key = String(BL_FULL) + "|" + locationName + "|" + contentMode + "|" + wifiStatusText();
+  String key = String(BL_FULL) + "|" + locationName + "|" + contentMode + "|" + wifiStatusText() + "|" + insightStatus;
   if (key == lastSettingsText) return;
 
   tft.fillRect(18, PAGE_ROW1_Y + 8, 204, 54, COL_PANEL);
@@ -2370,6 +2485,8 @@ void updateSettingsDynamic() {
   tft.drawString("Live card", 18, PAGE_ROW3_Y + 8, 2);
   tft.setTextColor(COL_TEXT, COL_PANEL);
   tft.drawString(contentModeLabel(), 18, PAGE_ROW3_Y + 34, 2);
+  tft.setTextColor(COL_DIM, COL_PANEL);
+  tft.drawString(insightStatus.substring(0, 12), 18, PAGE_ROW3_Y + 52, 1);
 
   tft.fillRect(134, PAGE_ROW3_Y + 8, 88, 54, COL_PANEL);
   tft.setTextColor(COL_DIM, COL_PANEL);
@@ -2573,8 +2690,8 @@ void handleNavTouch(int x, int y) {
 // WEB SERVER
 // =========================================================
 void handleRoot() {
-  String accent = prefs.getString("accent", "cyan");
-  String bg     = prefs.getString("bg", "slate");
+  String accent = prefs.getString("accent", "ice");
+  String bg     = prefs.getString("bg", "graphite");
   String txt    = prefs.getString("text", "standard");
   String units  = prefs.getString("units", "metric");
   String region = prefs.getString("region", "europe");
@@ -2582,13 +2699,14 @@ void handleRoot() {
   bool flashMode = prefs.getBool("flashMode", false);
   int brightness = prefs.getInt("brightness", BL_FULL);
   String liveMode = prefs.getString("contentMode", contentMode);
+  if (liveMode != "mix" && liveMode != "quote" && liveMode != "tech" && liveMode != "off") liveMode = "mix";
   String homeSlotKeys[HOME_SLOT_COUNT];
   for (int i = 0; i < HOME_SLOT_COUNT; i++) {
     homeSlotKeys[i] = prefs.getString((String("homeSlot") + String(i)).c_str(), homeWidgetKey(homeWidgetSlots[i]));
   }
 
   String page;
-  page.reserve(21000);
+  page.reserve(30000);
 
   page += "<!doctype html><html><head>";
   page += "<meta charset='utf-8'>";
@@ -2596,15 +2714,19 @@ void handleRoot() {
   page += "<title>Deskbuddy</title>";
   page += "<style>";
   page += ":root{color-scheme:dark;}";
-  page += "body{margin:0;background:linear-gradient(180deg,#0b1018 0%,#111827 100%);color:#edf2f7;font-family:system-ui,sans-serif;}";
+  page += "body{margin:0;background:#0b0d10;color:#f5f5f7;font-family:-apple-system,BlinkMacSystemFont,'SF Pro Display','Segoe UI',system-ui,sans-serif;}";
   page += ".wrap{max-width:980px;margin:0 auto;padding:28px 16px 36px;}";
-  page += ".hero{margin-bottom:18px;padding:18px 20px;border:1px solid #243244;border-radius:20px;background:linear-gradient(135deg,#111927 0%,#172235 100%);box-shadow:0 10px 30px rgba(0,0,0,.22);}";
-  page += ".hero h1{font-size:30px;margin:0 0 8px 0;}";
-  page += ".hero p{margin:0;color:#a9b7c9;font-size:14px;}";
-  page += ".ip{display:inline-block;margin-top:14px;padding:8px 12px;border-radius:999px;background:#0b1220;border:1px solid #334155;color:#dbe7f5;font-size:13px;}";
+  page += ".hero{margin-bottom:16px;padding:22px;border:1px solid #2c2f36;border-radius:22px;background:linear-gradient(145deg,#181b20 0%,#101215 100%);box-shadow:0 18px 60px rgba(0,0,0,.32);}";
+  page += ".hero h1{font-size:34px;margin:0 0 8px 0;letter-spacing:0;}";
+  page += ".hero p{margin:0;color:#b8bec7;font-size:14px;line-height:1.5;}";
+  page += ".ip{display:inline-block;margin-top:14px;padding:8px 12px;border-radius:999px;background:#1c1f24;border:1px solid #3a4049;color:#edf2f7;font-size:13px;}";
+  page += ".summary{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:16px;}";
+  page += ".summary-card{border:1px solid #2c2f36;border-radius:18px;background:#15181d;padding:14px;min-height:74px;}";
+  page += ".summary-card span{display:block;color:#9aa3ad;font-size:12px;margin-bottom:8px;}";
+  page += ".summary-card strong{display:block;color:#f5f5f7;font-size:16px;line-height:1.25;}";
   page += ".layout{display:grid;grid-template-columns:1.15fr .85fr;gap:16px;align-items:start;}";
   page += ".stack{display:grid;gap:16px;}";
-  page += ".panel{background:#171b22;border:1px solid #2d3748;border-radius:18px;padding:18px;margin:0;}";
+  page += ".panel{background:#15181d;border:1px solid #2c2f36;border-radius:18px;padding:18px;margin:0;}";
   page += ".panel-toggle{width:100%;display:flex;align-items:center;justify-content:space-between;gap:12px;background:none;border:none;color:#edf2f7;padding:0;margin:0;cursor:pointer;text-align:left;}";
   page += ".panel-toggle:hover{color:#ffffff;}";
   page += ".panel-toggle h2{flex:1;}";
@@ -2617,9 +2739,9 @@ void handleRoot() {
   page += ".grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;}";
   page += ".grid-3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;}";
   page += ".label{display:block;font-size:13px;margin:0 0 8px 0;color:#a0aec0;font-weight:600;}";
-  page += "textarea,input,select{width:100%;border-radius:12px;border:1px solid #334155;background:#0b1220;color:#edf2f7;padding:12px;box-sizing:border-box;font:inherit;}";
+  page += "textarea,input,select{width:100%;border-radius:12px;border:1px solid #343a42;background:#0f1115;color:#f5f5f7;padding:12px;box-sizing:border-box;font:inherit;}";
   page += "textarea{min-height:170px;resize:vertical;}";
-  page += "button{margin-top:18px;background:#38bdf8;border:none;color:#001018;padding:13px 18px;border-radius:12px;font-weight:800;cursor:pointer;font:inherit;}";
+  page += "button{margin-top:18px;background:#f5f5f7;border:none;color:#0b0d10;padding:13px 18px;border-radius:999px;font-weight:800;cursor:pointer;font:inherit;}";
   page += ".muted{font-size:13px;color:#94a3b8;line-height:1.45;}";
   page += ".footer-note{margin-top:10px;font-size:12px;color:#7f92a8;}";
   page += ".settings-block{margin-top:18px;padding-top:16px;border-top:1px solid #2b3545;}";
@@ -2642,7 +2764,7 @@ void handleRoot() {
   page += ".timer-slot-input{display:flex;align-items:center;gap:8px;}";
   page += ".timer-slot input{padding:10px 12px;text-align:center;font-weight:700;}";
   page += ".timer-unit{font-size:12px;color:#8ea3ba;white-space:nowrap;}";
-  page += "@media(max-width:820px){.layout{grid-template-columns:1fr;}.grid,.grid-3,.timer-slot-grid{grid-template-columns:1fr;}.color-row{grid-template-columns:1fr;}}";
+  page += "@media(max-width:820px){.layout,.summary{grid-template-columns:1fr;}.grid,.grid-3,.timer-slot-grid{grid-template-columns:1fr;}.color-row{grid-template-columns:1fr;}}";
   page += "</style></head><body><div class='wrap'>";
   page += "<div class='hero'>";
   page += "<h1>Deskbuddy</h1>";
@@ -2650,6 +2772,13 @@ void handleRoot() {
   page += "<div class='ip'>ESP IP: ";
   page += WiFi.localIP().toString();
   page += "</div></div>";
+
+  page += "<div class='summary'>";
+  page += "<div class='summary-card'><span>Wi-Fi</span><strong>" + wifiStatusText() + "</strong></div>";
+  page += "<div class='summary-card'><span>Weather</span><strong>" + tempText() + " / " + weatherConditionText(weatherCode) + "</strong></div>";
+  page += "<div class='summary-card'><span>Live</span><strong>" + contentModeLabel() + "</strong></div>";
+  page += "<div class='summary-card'><span>Sync</span><strong>" + lastSyncText() + "</strong></div>";
+  page += "</div>";
 
   page += "<form method='POST' action='/save'>";
   page += "<div class='layout'><div class='stack'>";
@@ -2718,6 +2847,9 @@ void handleRoot() {
   page += "<label class='swatch" + String(bg=="soft"?" active":"") + "' style='background:" + themePreviewCss("soft") + ";'><input type='radio' name='bg' value='soft'" + String(bg=="soft"?" checked":"") + "></label>";
   page += "<label class='swatch" + String(bg=="midnight"?" active":"") + "' style='background:" + themePreviewCss("midnight") + ";'><input type='radio' name='bg' value='midnight'" + String(bg=="midnight"?" checked":"") + "></label>";
   page += "<label class='swatch" + String(bg=="graphite"?" active":"") + "' style='background:" + themePreviewCss("graphite") + ";'><input type='radio' name='bg' value='graphite'" + String(bg=="graphite"?" checked":"") + "></label>";
+  page += "<label class='swatch" + String(bg=="platinum"?" active":"") + "' style='background:" + themePreviewCss("platinum") + ";'><input type='radio' name='bg' value='platinum'" + String(bg=="platinum"?" checked":"") + "></label>";
+  page += "<label class='swatch" + String(bg=="cupertino"?" active":"") + "' style='background:" + themePreviewCss("cupertino") + ";'><input type='radio' name='bg' value='cupertino'" + String(bg=="cupertino"?" checked":"") + "></label>";
+  page += "<label class='swatch" + String(bg=="glass"?" active":"") + "' style='background:" + themePreviewCss("glass") + ";'><input type='radio' name='bg' value='glass'" + String(bg=="glass"?" checked":"") + "></label>";
   page += "<label class='swatch" + String(bg=="garnet"?" active":"") + "' style='background:" + themePreviewCss("garnet") + ";'><input type='radio' name='bg' value='garnet'" + String(bg=="garnet"?" checked":"") + "></label>";
   page += "<label class='swatch" + String(bg=="ochre"?" active":"") + "' style='background:" + themePreviewCss("ochre") + ";'><input type='radio' name='bg' value='ochre'" + String(bg=="ochre"?" checked":"") + "></label>";
   page += "</div></div>";
@@ -2744,6 +2876,7 @@ void handleRoot() {
   page += "</select><div class='muted' style='margin-top:8px;'>Sleep dims the screen first, then turns it fully off after 60 seconds.</div></div>";
   page += "<div><label class='label'>Brightness</label><input type='range' min='30' max='255' name='brightness' value='" + String(brightness) + "'></div>";
   page += "<div><label class='label'>Live card</label><select name='contentMode'>";
+  page += "<option value='mix'" + String(liveMode=="mix"?" selected":"") + ">Quotes and technology</option>";
   page += "<option value='quote'" + String(liveMode=="quote"?" selected":"") + ">Quote of the moment</option>";
   page += "<option value='tech'" + String(liveMode=="tech"?" selected":"") + ">Technology headline</option>";
   page += "<option value='off'" + String(liveMode=="off"?" selected":"") + ">Off</option>";
@@ -2793,7 +2926,7 @@ void handleRoot() {
   page += "<button type='submit'>Save to Deskbuddy</button>";
   page += "</div></div></form>";
   page += "<script>";
-  page += "var colorNames={accent:{standard:'Standard',ice:'Ice',white:'White',cyan:'Cyan',mint:'Mint',green:'Green',blue:'Blue',purple:'Purple',pink:'Pink',orange:'Orange',amber:'Amber',red:'Red'},text:{standard:'Standard',ice:'Ice',white:'White',cyan:'Cyan',mint:'Mint',green:'Green',blue:'Blue',purple:'Purple',pink:'Pink',orange:'Orange',amber:'Amber',red:'Red'},bg:{slate:'Slate',deep:'Deep black',nordic:'Nordic blue',forest:'Forest',coffee:'Coffee',soft:'Soft dark',midnight:'Midnight',graphite:'Graphite',garnet:'Garnet',ochre:'Ochre'}};";
+  page += "var colorNames={accent:{standard:'Standard',ice:'Ice',white:'White',cyan:'Cyan',mint:'Mint',green:'Green',blue:'Blue',purple:'Purple',pink:'Pink',orange:'Orange',amber:'Amber',red:'Red'},text:{standard:'Standard',ice:'Ice',white:'White',cyan:'Cyan',mint:'Mint',green:'Green',blue:'Blue',purple:'Purple',pink:'Pink',orange:'Orange',amber:'Amber',red:'Red'},bg:{slate:'Slate',deep:'Deep black',nordic:'Nordic blue',forest:'Forest',coffee:'Coffee',soft:'Soft dark',midnight:'Midnight',graphite:'Graphite',platinum:'Platinum',cupertino:'Cupertino',glass:'Glass',garnet:'Garnet',ochre:'Ochre'}};";
   page += "var panelStorageKey='deskbuddy-panel-state-v1';";
   page += "document.querySelectorAll('.swatch input').forEach(function(input){";
   page += "input.addEventListener('change',function(){";
@@ -2830,8 +2963,8 @@ void handleRoot() {
 
 void handleSave() {
   String newNotes  = server.hasArg("notes") ? server.arg("notes") : notesText;
-  String newAccent = server.hasArg("accent") ? server.arg("accent") : "cyan";
-  String newBg     = server.hasArg("bg") ? server.arg("bg") : "slate";
+  String newAccent = server.hasArg("accent") ? server.arg("accent") : "ice";
+  String newBg     = server.hasArg("bg") ? server.arg("bg") : "graphite";
   String newText   = server.hasArg("text") ? server.arg("text") : "standard";
   String newUnits  = server.hasArg("units") ? server.arg("units") : "metric";
   String newRegion = server.hasArg("region") ? server.arg("region") : "europe";
@@ -2858,7 +2991,7 @@ void handleSave() {
   if (newNickname.length() > 24) newNickname = newNickname.substring(0, 24);
   if (newUnits != "metric" && newUnits != "imperial") newUnits = "metric";
   if (newRegion != "europe" && newRegion != "us") newRegion = "europe";
-  if (newContentMode != "quote" && newContentMode != "tech" && newContentMode != "off") newContentMode = "quote";
+  if (newContentMode != "mix" && newContentMode != "quote" && newContentMode != "tech" && newContentMode != "off") newContentMode = "mix";
 
   int newSleepMin = server.hasArg("sleepMin") ? server.arg("sleepMin").toInt() : sleepIntervalMin;
   sleepIntervalMin = constrain(newSleepMin, 0, 120);

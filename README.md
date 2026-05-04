@@ -30,7 +30,7 @@ If the screen stays white, replace the installed TFT_eSPI `User_Setup.h` with th
 - Apple-inspired Weather page with current conditions, hourly forecast, and 7-day forecast
 - Focus timer with configurable presets and completion alert
 - Notes card for quick daily reminders
-- Live card with either quotes or technology headlines
+- Live ticker/card with quotes, technology headlines, or mixed rotation with local fallback
 - On-device Setup page for brightness, city presets, live content mode, and Wi-Fi portal
 - Local browser settings page after the board joins Wi-Fi
 - Open-Meteo weather, hourly forecast, daily forecast, wind, UV, and rain probability

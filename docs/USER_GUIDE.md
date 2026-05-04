@@ -14,7 +14,7 @@ Good default widgets:
 - Rain for commute or errands
 - Outdoor temperature for quick context
 
-The focus card opens the timer picker. The ticker content is controlled from Setup or the browser settings page.
+The focus card opens the timer picker. The ticker content is controlled from Setup or the browser settings page. Use `Mix` to rotate between quotes and technology headlines.
 
 ## Weather
 
@@ -43,7 +43,7 @@ Use Notes for short reminders that should stay visible during the day, such as:
 - A shopping or errand note
 - A deployment checklist
 
-The live card below Notes can show either a quote or a technology headline.
+The live card below Notes can show quotes, technology headlines, or a mixed rotation. If public APIs fail, Deskbuddy keeps a local fallback message visible and retries automatically.
 
 ## Status
 
