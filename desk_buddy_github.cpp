@@ -224,6 +224,7 @@ String lastNotesText = "";
 String lastNetworkToggleText = "";
 String lastSettingsText = "";
 String lastInsightText = "";
+String lastWeatherPanelText = "";
 
 const char* homeWidgetKey(HomeWidgetType type) {
   switch (type) {
@@ -349,6 +350,26 @@ const CityPreset CITY_PRESETS[] = {
 const int CITY_PRESET_COUNT = sizeof(CITY_PRESETS) / sizeof(CITY_PRESETS[0]);
 
 // Weather
+const int HOURLY_FORECAST_COUNT = 6;
+const int DAILY_FORECAST_COUNT = 7;
+
+struct HourlyForecast {
+  int minuteOfDay;
+  float tempC;
+  float precipProb;
+  int weatherCode;
+  bool valid;
+};
+
+struct DailyForecast {
+  String label;
+  float minC;
+  float maxC;
+  float precipProb;
+  int weatherCode;
+  bool valid;
+};
+
 static float tempC = NAN;
 static float tempMinC = NAN;
 static float tempMaxC = NAN;
@@ -356,6 +377,9 @@ static float precipMm = NAN;
 static float windSpeedMs = NAN;
 static float windDirectionDeg = NAN;
 static float uvIndex = NAN;
+static int weatherCode = -1;
+HourlyForecast hourlyForecasts[HOURLY_FORECAST_COUNT];
+DailyForecast dailyForecasts[DAILY_FORECAST_COUNT];
 static time_t lastWeatherFetch = 0;
 static const uint32_t WEATHER_INTERVAL_SEC = 10 * 60;
 
@@ -496,6 +520,16 @@ static String formatDisplayTemp(float value) {
   return String((int)roundf(value)) + "C";
 }
 
+static String formatCompactTemp(float value) {
+  if (isnan(value)) return "--";
+
+  if (unitKey == "imperial") {
+    return String((int)roundf(value * 9.0f / 5.0f + 32.0f));
+  }
+
+  return String((int)roundf(value));
+}
+
 static String tempRangeText() {
   return "H:" + formatDisplayTemp(tempMaxC) + "  L:" + formatDisplayTemp(tempMinC);
 }
@@ -528,6 +562,54 @@ static String windDirectionText() {
   const char* dirs[] = {"N", "NE", "E", "SE", "S", "SW", "W", "NW"};
   int idx = (int)roundf(windDirectionDeg / 45.0f) % 8;
   return String(dirs[idx]) + " " + String((int)roundf(windDirectionDeg)) + "deg";
+}
+
+static String formatHourLabel(int minuteOfDay) {
+  if (minuteOfDay < 0) return "--";
+  int hour = minuteOfDay / 60;
+  if (useUsRegionFormat()) {
+    int hour12 = hour % 12;
+    if (hour12 == 0) hour12 = 12;
+    return String(hour12) + (hour >= 12 ? "p" : "a");
+  }
+
+  char buf[6];
+  snprintf(buf, sizeof(buf), "%02d", hour);
+  return String(buf);
+}
+
+static String weekdayLabelFromDate(const char* isoDate, int index) {
+  if (index == 0) return "Today";
+  if (!isoDate || strlen(isoDate) < 10) return "+" + String(index) + "d";
+
+  struct tm tmDate;
+  memset(&tmDate, 0, sizeof(tmDate));
+  tmDate.tm_year = String(isoDate).substring(0, 4).toInt() - 1900;
+  tmDate.tm_mon = String(isoDate).substring(5, 7).toInt() - 1;
+  tmDate.tm_mday = String(isoDate).substring(8, 10).toInt();
+  tmDate.tm_isdst = -1;
+  mktime(&tmDate);
+
+  char buf[8];
+  strftime(buf, sizeof(buf), "%a", &tmDate);
+  return String(buf);
+}
+
+static String weatherConditionText(int code) {
+  if (code < 0) return "Updating";
+  if (code == 0) return "Clear";
+  if (code <= 3) return "Cloudy";
+  if (code == 45 || code == 48) return "Fog";
+  if ((code >= 51 && code <= 67) || (code >= 80 && code <= 82)) return "Rain";
+  if ((code >= 71 && code <= 77) || (code >= 85 && code <= 86)) return "Snow";
+  if (code >= 95) return "Storm";
+  return "Weather";
+}
+
+static String weatherShortText(int code) {
+  String label = weatherConditionText(code);
+  if (label == "Updating") return "--";
+  return label;
 }
 
 static String kpText() {
@@ -920,8 +1002,8 @@ void applyTextColorByKey(const String& key) {
 void loadStoredSettings() {
   prefs.begin("deskbuddy", false);
 
-  String accent = prefs.getString("accent", "cyan");
-  String bg     = prefs.getString("bg", "slate");
+  String accent = prefs.getString("accent", "ice");
+  String bg     = prefs.getString("bg", "graphite");
   String txt    = prefs.getString("text", "standard");
 
   notesText        = prefs.getString("notes", "No notes yet.");
@@ -957,9 +1039,15 @@ void loadStoredSettings() {
 
 void resetDataCaches() {
   tempC = NAN;
+  tempMinC = NAN;
+  tempMaxC = NAN;
   precipMm = NAN;
   windSpeedMs = NAN;
   windDirectionDeg = NAN;
+  uvIndex = NAN;
+  weatherCode = -1;
+  for (int i = 0; i < HOURLY_FORECAST_COUNT; i++) hourlyForecasts[i].valid = false;
+  for (int i = 0; i < DAILY_FORECAST_COUNT; i++) dailyForecasts[i].valid = false;
   kpIndex = NAN;
   sunriseMin = -1;
   sunsetMin = -1;
@@ -1104,10 +1192,10 @@ bool fetchWeather() {
 
   String url = String("https://api.open-meteo.com/v1/forecast?latitude=") + String(LAT, 4) +
                "&longitude=" + String(LNG, 4) +
-               "&current=temperature_2m,wind_speed_10m,wind_direction_10m,uv_index" +
-               "&hourly=precipitation" +
-               "&daily=temperature_2m_max,temperature_2m_min" +
-               "&forecast_days=1&timezone=auto&wind_speed_unit=ms";
+               "&current=temperature_2m,wind_speed_10m,wind_direction_10m,uv_index,weather_code" +
+               "&hourly=temperature_2m,precipitation,precipitation_probability,weather_code" +
+               "&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max" +
+               "&forecast_days=7&timezone=auto&wind_speed_unit=ms";
 
   HTTPClient http;
   if (!http.begin(client, url)) return false;
@@ -1121,23 +1209,44 @@ bool fetchWeather() {
   String body = http.getString();
   http.end();
 
-  StaticJsonDocument<4096> doc;
+  DynamicJsonDocument doc(24576);
   if (deserializeJson(doc, body)) return false;
 
   tempC = doc["current"]["temperature_2m"] | NAN;
   windSpeedMs = doc["current"]["wind_speed_10m"] | NAN;
   windDirectionDeg = doc["current"]["wind_direction_10m"] | NAN;
   uvIndex = doc["current"]["uv_index"] | NAN;
+  weatherCode = doc["current"]["weather_code"] | -1;
   tempMaxC = NAN;
   tempMinC = NAN;
 
   JsonArray maxTemps = doc["daily"]["temperature_2m_max"];
   JsonArray minTemps = doc["daily"]["temperature_2m_min"];
+  JsonArray dailyCodes = doc["daily"]["weather_code"];
+  JsonArray dailyRain = doc["daily"]["precipitation_probability_max"];
+  JsonArray dailyTimes = doc["daily"]["time"];
   if (maxTemps && !maxTemps.isNull() && maxTemps.size() > 0) tempMaxC = maxTemps[0] | NAN;
   if (minTemps && !minTemps.isNull() && minTemps.size() > 0) tempMinC = minTemps[0] | NAN;
 
+  for (int i = 0; i < DAILY_FORECAST_COUNT; i++) {
+    dailyForecasts[i].valid = false;
+    if (!dailyTimes || !maxTemps || !minTemps || i >= (int)dailyTimes.size()) continue;
+    const char* dateText = dailyTimes[i];
+    dailyForecasts[i].label = weekdayLabelFromDate(dateText, i);
+    dailyForecasts[i].maxC = maxTemps[i] | NAN;
+    dailyForecasts[i].minC = minTemps[i] | NAN;
+    dailyForecasts[i].precipProb = dailyRain ? (dailyRain[i] | NAN) : NAN;
+    dailyForecasts[i].weatherCode = dailyCodes ? (dailyCodes[i] | -1) : -1;
+    dailyForecasts[i].valid = true;
+  }
+
   JsonArray times = doc["hourly"]["time"];
   JsonArray precs = doc["hourly"]["precipitation"];
+  JsonArray hourlyTemps = doc["hourly"]["temperature_2m"];
+  JsonArray hourlyRain = doc["hourly"]["precipitation_probability"];
+  JsonArray hourlyCodes = doc["hourly"]["weather_code"];
+
+  for (int i = 0; i < HOURLY_FORECAST_COUNT; i++) hourlyForecasts[i].valid = false;
 
   if (times && precs) {
     time_t nowT = time(nullptr);
@@ -1157,6 +1266,20 @@ bool fetchWeather() {
     }
     if (idx < 0) idx = 0;
     precipMm = precs[idx] | NAN;
+
+    for (int i = 0; i < HOURLY_FORECAST_COUNT; i++) {
+      int src = idx + i;
+      if (src >= (int)times.size()) break;
+      const char* hourText = times[src];
+      if (!hourText || strlen(hourText) < 16) continue;
+      int hour = String(hourText).substring(11, 13).toInt();
+      int minute = String(hourText).substring(14, 16).toInt();
+      hourlyForecasts[i].minuteOfDay = hour * 60 + minute;
+      hourlyForecasts[i].tempC = hourlyTemps ? (hourlyTemps[src] | NAN) : NAN;
+      hourlyForecasts[i].precipProb = hourlyRain ? (hourlyRain[src] | NAN) : NAN;
+      hourlyForecasts[i].weatherCode = hourlyCodes ? (hourlyCodes[src] | -1) : -1;
+      hourlyForecasts[i].valid = true;
+    }
   }
 
   lastWeatherFetch = time(nullptr);
@@ -1166,7 +1289,7 @@ bool fetchWeather() {
 
 void ensureWeather() {
   time_t nowT = time(nullptr);
-  if ((isnan(tempC) || isnan(tempMinC) || isnan(tempMaxC) || isnan(precipMm) || isnan(windSpeedMs) || isnan(windDirectionDeg) || isnan(uvIndex) ||
+  if ((isnan(tempC) || isnan(tempMinC) || isnan(tempMaxC) || isnan(precipMm) || isnan(windSpeedMs) || isnan(windDirectionDeg) || isnan(uvIndex) || weatherCode < 0 ||
        (nowT - lastWeatherFetch) > WEATHER_INTERVAL_SEC) &&
       WiFi.status() == WL_CONNECTED) {
     if (fetchWeather()) dataDirty = true;
@@ -1290,8 +1413,8 @@ void ensureKpIndex() {
 // DRAW HELPERS
 // =========================================================
 void drawCard(int x, int y, int w, int h, bool accent = false) {
-  tft.fillRoundRect(x, y, w, h, 10, COL_PANEL);
-  tft.drawRoundRect(x, y, w, h, 10, accent ? COL_ACCENT : COL_STROKE);
+  tft.fillRoundRect(x, y, w, h, 8, COL_PANEL);
+  tft.drawRoundRect(x, y, w, h, 8, accent ? COL_ACCENT : COL_STROKE);
 }
 
 void drawTopBar(const String& title) {
@@ -1809,116 +1932,85 @@ void drawWeatherPageFull() {
   drawTopBar("Weather");
   drawNavBar();
 
-  drawCard(8, PAGE_ROW1_Y, 108, PAGE_WIDGET_H, true);
-  drawCard(124, PAGE_ROW1_Y, 108, PAGE_WIDGET_H, true);
-  drawCard(8, PAGE_ROW2_Y, 108, PAGE_WIDGET_H, true);
-  drawCard(124, PAGE_ROW2_Y, 108, PAGE_WIDGET_H, true);
-  drawCard(8, PAGE_ROW3_Y, 108, PAGE_WIDGET_H, true);
-  drawCard(124, PAGE_ROW3_Y, 108, PAGE_WIDGET_H, true);
+  drawCard(8, 40, 224, 78, true);
+  drawCard(8, 124, 224, 64, true);
+  drawCard(8, 194, 224, 78, true);
 
   pageDirty = false;
   lastDrawnPage = PAGE_WEATHER;
 
-  lastTempText = "";
-  lastRainText = "";
-  lastUvText = "";
-  lastUvLevelText = "";
-  lastKpText = "";
-  lastKpLevelText = "";
-  lastWindText = "";
-  lastWindDirText = "";
-  lastNextSunLabel = "";
-  lastNextSunTime = "";
+  lastWeatherPanelText = "";
 }
 
 void updateWeatherDynamic() {
-  String t = tempText();
-  String tr = tempRangeText();
-  String tempCombined = t + "|" + tr;
-  if (tempCombined != lastTempText) {
-    tft.fillRect(18, PAGE_ROW1_Y + 30, 88, 30, COL_PANEL);
-    tft.setTextColor(COL_DIM, COL_PANEL);
-    tft.drawString("Outdoor", 18, PAGE_ROW1_Y + 8, 2);
-    tft.setTextColor(COL_TEXT, COL_PANEL);
-    tft.drawString(t, 18, PAGE_ROW1_Y + 30, 4);
-    tft.setTextColor(COL_ACCENT, COL_PANEL);
-    tft.drawString(tr, 18, PAGE_ROW1_Y + 54, 1);
-    lastTempText = tempCombined;
+  String key = tempText() + "|" + tempRangeText() + "|" + rainText() + "|" + windText() + "|" +
+               uvText() + "|" + String(weatherCode) + "|" + locationName + "|" + lastSyncText();
+  for (int i = 0; i < HOURLY_FORECAST_COUNT; i++) {
+    key += "|" + String(hourlyForecasts[i].valid ? 1 : 0) + ":" +
+           String(hourlyForecasts[i].minuteOfDay) + ":" +
+           String(hourlyForecasts[i].tempC, 1) + ":" +
+           String(hourlyForecasts[i].precipProb, 0) + ":" +
+           String(hourlyForecasts[i].weatherCode);
   }
-
-  String r = rainText();
-  if (r != lastRainText) {
-    tft.fillRect(134, PAGE_ROW1_Y + 30, 88, 24, COL_PANEL);
-    tft.setTextColor(COL_DIM, COL_PANEL);
-    tft.drawString("Rain", 134, PAGE_ROW1_Y + 8, 2);
-    tft.setTextColor(COL_TEXT, COL_PANEL);
-    tft.drawString(r, 134, PAGE_ROW1_Y + 30, 4);
-    lastRainText = r;
+  for (int i = 0; i < DAILY_FORECAST_COUNT; i++) {
+    key += "|" + String(dailyForecasts[i].valid ? 1 : 0) + ":" +
+           dailyForecasts[i].label + ":" +
+           String(dailyForecasts[i].minC, 1) + ":" +
+           String(dailyForecasts[i].maxC, 1) + ":" +
+           String(dailyForecasts[i].precipProb, 0) + ":" +
+           String(dailyForecasts[i].weatherCode);
   }
+  if (!dataDirty && key == lastWeatherPanelText) return;
+  lastWeatherPanelText = key;
 
-  String u = uvText();
-  String ul = uvLevelText();
-  if (u != lastUvText || ul != lastUvLevelText || dataDirty) {
-    tft.fillRect(18, PAGE_ROW2_Y + 30, 88, 30, COL_PANEL);
-    tft.setTextColor(COL_DIM, COL_PANEL);
-    tft.drawString("UV index", 18, PAGE_ROW2_Y + 8, 2);
-    tft.setTextColor(COL_TEXT, COL_PANEL);
-    tft.drawString(u, 18, PAGE_ROW2_Y + 28, 4);
-    tft.setTextColor(COL_ACCENT, COL_PANEL);
-    tft.drawString(ul, 18, PAGE_ROW2_Y + 52, 1);
-    lastUvText = u;
-    lastUvLevelText = ul;
-  }
+  tft.fillRect(12, 44, 216, 70, COL_PANEL);
+  tft.setTextColor(COL_DIM, COL_PANEL);
+  tft.drawString(locationName, 18, 48, 2);
+  tft.drawString(weatherConditionText(weatherCode), 18, 68, 2);
 
-  String w = windText();
-  String wd = windDirectionText();
-  if (w != lastWindText || wd != lastWindDirText) {
-    tft.fillRect(134, PAGE_ROW2_Y + 30, 88, 30, COL_PANEL);
-    tft.setTextColor(COL_DIM, COL_PANEL);
-    tft.drawString("Wind", 134, PAGE_ROW2_Y + 8, 2);
-    tft.setTextColor(COL_TEXT, COL_PANEL);
-    tft.drawString(w, 134, PAGE_ROW2_Y + 28, 4);
-    tft.setTextColor(COL_ACCENT, COL_PANEL);
-    tft.drawString(wd, 134, PAGE_ROW2_Y + 52, 1);
-    lastWindText = w;
-    lastWindDirText = wd;
-  }
+  tft.setTextColor(COL_TEXT, COL_PANEL);
+  tft.drawString(tempText(), 132, 50, 4);
+  tft.setTextColor(COL_ACCENT, COL_PANEL);
+  tft.drawString(tempRangeText(), 18, 94, 1);
+  tft.setTextColor(COL_DIM, COL_PANEL);
+  tft.drawString(windText() + "  " + uvText(), 118, 94, 1);
 
-  String nl = nextSunLabel();
-  String nt = nextSunTimeText();
-  if (nl != lastNextSunLabel || nt != lastNextSunTime) {
-    tft.fillRect(18, PAGE_ROW3_Y + 24, 88, 30, COL_PANEL);
-    tft.setTextColor(COL_DIM, COL_PANEL);
-    tft.drawString(nl, 18, PAGE_ROW3_Y + 8, 2);
-    tft.setTextColor(COL_TEXT, COL_PANEL);
-    if (useUsRegionFormat()) {
-      int splitAt = nt.lastIndexOf(' ');
-      String sunMain = splitAt > 0 ? nt.substring(0, splitAt) : nt;
-      String sunSuffix = splitAt > 0 ? nt.substring(splitAt + 1) : "";
-      tft.drawString(sunMain, 18, PAGE_ROW3_Y + 26, 4);
-      if (sunSuffix.length() > 0) {
-        int suffixX = 18 + tft.textWidth(sunMain, 4) + 3;
-        tft.drawString(sunSuffix, suffixX, PAGE_ROW3_Y + 31, 2);
-      }
-    } else {
-      tft.drawString(nt, 18, PAGE_ROW3_Y + 26, 4);
+  tft.fillRect(12, 128, 216, 56, COL_PANEL);
+  tft.setTextColor(COL_DIM, COL_PANEL);
+  tft.drawString("Next hours", 18, 130, 1);
+  const int colW = 34;
+  for (int i = 0; i < HOURLY_FORECAST_COUNT; i++) {
+    int x = 18 + i * colW;
+    if (i < HOURLY_FORECAST_COUNT - 1) tft.drawFastVLine(x + colW - 4, 145, 30, COL_STROKE);
+    if (!hourlyForecasts[i].valid) {
+      tft.setTextColor(COL_DIM, COL_PANEL);
+      tft.drawCentreString("--", x + 14, 158, 1);
+      continue;
     }
-    lastNextSunLabel = nl;
-    lastNextSunTime = nt;
+    tft.setTextColor(COL_DIM, COL_PANEL);
+    tft.drawCentreString(formatHourLabel(hourlyForecasts[i].minuteOfDay).c_str(), x + 14, 146, 1);
+    tft.setTextColor(COL_TEXT, COL_PANEL);
+    tft.drawCentreString(formatCompactTemp(hourlyForecasts[i].tempC).c_str(), x + 14, 158, 2);
+    tft.setTextColor(COL_ACCENT, COL_PANEL);
+    String pop = isnan(hourlyForecasts[i].precipProb) ? "--" : String((int)roundf(hourlyForecasts[i].precipProb)) + "%";
+    tft.drawCentreString(pop.c_str(), x + 14, 176, 1);
   }
 
-  String k = kpText();
-  String kl = kpLevelText();
-  if (k != lastKpText || kl != lastKpLevelText || dataDirty) {
-    tft.fillRect(134, PAGE_ROW3_Y + 30, 88, 30, COL_PANEL);
-    tft.setTextColor(COL_DIM, COL_PANEL);
-    tft.drawString("KP index", 134, PAGE_ROW3_Y + 8, 2);
+  tft.fillRect(12, 198, 216, 70, COL_PANEL);
+  tft.setTextColor(COL_DIM, COL_PANEL);
+  tft.drawString("7-day forecast", 18, 199, 1);
+  for (int i = 0; i < DAILY_FORECAST_COUNT; i++) {
+    int y = 211 + i * 8;
+    if (!dailyForecasts[i].valid) continue;
+    tft.setTextColor(i == 0 ? COL_TEXT : COL_DIM, COL_PANEL);
+    tft.drawString(dailyForecasts[i].label.substring(0, 5), 18, y, 1);
+    tft.drawString(weatherShortText(dailyForecasts[i].weatherCode).substring(0, 6), 70, y, 1);
+    String range = formatCompactTemp(dailyForecasts[i].maxC) + "/" + formatCompactTemp(dailyForecasts[i].minC);
     tft.setTextColor(COL_TEXT, COL_PANEL);
-    tft.drawString(k, 134, PAGE_ROW3_Y + 28, 4);
+    tft.drawRightString(range.c_str(), 176, y, 1);
     tft.setTextColor(COL_ACCENT, COL_PANEL);
-    tft.drawString(kl, 134, PAGE_ROW3_Y + 52, 1);
-    lastKpText = k;
-    lastKpLevelText = kl;
+    String rain = isnan(dailyForecasts[i].precipProb) ? "--" : String((int)roundf(dailyForecasts[i].precipProb)) + "%";
+    tft.drawRightString(rain.c_str(), 222, y, 1);
   }
 }
 

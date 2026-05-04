@@ -1,16 +1,19 @@
 # Deskbuddy
 
-Deskbuddy is a compact ESP32-based smart desk companion built around a touchscreen display. The project combines 3D printing, simple hardware, and software to turn a raw ESP32 screen into a practical mini dashboard for your workspace.
+Deskbuddy turns a low-cost ESP32 touchscreen into a focused desk companion for work: clock, weather, notes, timer, Wi-Fi setup, brightness, live quotes, technology headlines, and a browser-based settings panel.
 
-## Tested Board
+This fork is tuned for a clean, minimal interface on the CYD 2.8 inch display. The main goal is to make the device useful at a glance during the workday, without needing a phone or laptop tab open.
 
-This fork has been tested on the **ESP32-2432S028R** 2.8 inch touchscreen board, also commonly sold as:
+## Tested Hardware
 
-- **CYD** / Cheap Yellow Display
-- **ESP32-2432S028R ILI9341**
-- 240 x 320 TFT display with XPT2046 touch
+Tested and working on:
 
-The working display configuration for this board is included in [`User_Setup.h`](User_Setup.h):
+- Board: **ESP32-2432S028R CYD**
+- Display: **2.8 inch ILI9341**, 240 x 320
+- Touch: **XPT2046**
+- Chip detected locally: **ESP32-D0WD-V3**
+
+Known working display configuration is included in [`User_Setup.h`](User_Setup.h):
 
 - Display driver: `ILI9341_2_DRIVER`
 - Display SPI bus: `HSPI`
@@ -18,77 +21,91 @@ The working display configuration for this board is included in [`User_Setup.h`]
 - Backlight pin: `21`
 - Touch pins: CS `33`, IRQ `36`, SCK `25`, MISO `39`, MOSI `32`
 
-If your screen stays white, make sure the included `User_Setup.h` has been copied into the installed `TFT_eSPI` library folder, replacing the library's default setup file.
+If the screen stays white, replace the installed TFT_eSPI `User_Setup.h` with the one from this repo.
 
-## Current Features
+## Features
 
-- Touch dashboard with Home, Weather, Notes, Status, and Setup pages
-- On-device Setup page for brightness, city presets, live content mode, and Wi-Fi setup portal
-- Browser settings page for notes, theme, widgets, location, timers, brightness, and content mode
-- Weather from Open-Meteo
+- Minimal touch UI with Home, Weather, Notes, Status, and Setup pages
+- Apple-inspired Weather page with current conditions, hourly forecast, and 7-day forecast
+- Focus timer with configurable presets and completion alert
+- Notes card for quick daily reminders
+- Live card with either quotes or technology headlines
+- On-device Setup page for brightness, city presets, live content mode, and Wi-Fi portal
+- Local browser settings page after the board joins Wi-Fi
+- Open-Meteo weather, hourly forecast, daily forecast, wind, UV, and rain probability
 - Sunrise and sunset from sunrise-sunset.org
 - KP index from NOAA
-- Optional quote card from Quotable
-- Optional technology headline from Hacker News Algolia
 - GitHub Actions firmware build
-- GitHub Pages Web Serial installer
+- GitHub Pages installer using ESP Web Tools
 
-## Wi-Fi Credentials
+## Install From Browser
 
-Do not hardcode Wi-Fi credentials in the sketch.
+After the workflow publishes from `main`, open:
 
-Copy the example secrets file and edit it locally:
-
-```sh
-cp arduino_secrets.example.h arduino_secrets.h
+```text
+https://fernandofatech.github.io/Deskbuddy/
 ```
 
-Then set:
+Use Chrome or Edge, connect the board by USB, and click **Install Deskbuddy**.
 
-```cpp
-#define DESKBUDDY_WIFI_SSID "YOUR_WIFI_SSID"
-#define DESKBUDDY_WIFI_PASS "YOUR_WIFI_PASSWORD"
-```
+## Arduino Build
 
-`arduino_secrets.h` is ignored by Git so your network name and password are not committed.
-
-## Arduino Setup
-
-Use the Arduino ESP32 board package and select:
-
-- Board: `ESP32-2432S028R CYD`
-- Partition scheme: `Huge APP (3MB No OTA/1MB SPIFFS)`
-- Upload speed: `115200` if higher speeds fail
-
-Install these Arduino libraries:
+Install the Arduino ESP32 core and these libraries:
 
 - `TFT_eSPI`
 - `ArduinoJson`
 - `XPT2046_Touchscreen`
 - `WiFiManager`
 
-Before compiling, replace the installed TFT_eSPI setup file with this repo's `User_Setup.h`.
-
-On macOS with `arduino-cli`, the TFT_eSPI setup file is usually:
-
-```sh
-~/Documents/Arduino/libraries/TFT_eSPI/User_Setup.h
-```
-
-## Notes
-
-The firmware exposes a local web interface after the ESP32 connects to Wi-Fi. Use the serial monitor at `115200` baud to inspect boot logs and find the device IP address.
-
-If Wi-Fi is not configured, open the on-device `Setup` page and tap the Wi-Fi card. Deskbuddy starts a temporary access point named `Deskbuddy Setup`; connect from a phone or computer and choose the desired Wi-Fi network.
-
-## GitHub Pages Installer
-
-The workflow in `.github/workflows/build-and-pages.yml` compiles the firmware and publishes a Web Serial installer from the `web/` folder when changes land on `main`.
-
-The installer expects a generated merged firmware binary at:
+Use this board profile:
 
 ```text
-firmware/deskbuddy-esp32-2432s028r-cyd.bin
+esp32:esp32:jczn_2432s028r
 ```
 
-GitHub Actions creates that file from the Arduino CLI build output.
+Recommended options:
+
+- Partition scheme: `Huge APP (3MB No OTA/1MB SPIFFS)`
+- Upload speed: `115200`
+
+Example compile:
+
+```sh
+arduino-cli compile --fqbn esp32:esp32:jczn_2432s028r:UploadSpeed=115200,PartitionScheme=huge_app Deskbuddy
+```
+
+Example upload:
+
+```sh
+arduino-cli compile --upload -p /dev/cu.usbserial-120 --fqbn esp32:esp32:jczn_2432s028r:UploadSpeed=115200,PartitionScheme=huge_app Deskbuddy
+```
+
+## Wi-Fi And Secrets
+
+Do not commit Wi-Fi credentials.
+
+Optional static credentials can be stored locally:
+
+```sh
+cp arduino_secrets.example.h arduino_secrets.h
+```
+
+Then edit:
+
+```cpp
+#define DESKBUDDY_WIFI_SSID "YOUR_WIFI_SSID"
+#define DESKBUDDY_WIFI_PASS "YOUR_WIFI_PASSWORD"
+```
+
+`arduino_secrets.h` is ignored by Git. If credentials are not present, use the board's Setup page to open the `Deskbuddy Setup` Wi-Fi portal.
+
+## Documentation
+
+- [Setup Guide](SETUP_GUIDE.md)
+- [User Guide](docs/USER_GUIDE.md)
+- [Development Guide](docs/DEVELOPMENT.md)
+
+## CI And Pages
+
+The workflow at [`.github/workflows/build-and-pages.yml`](.github/workflows/build-and-pages.yml) compiles the firmware, uploads build artifacts, and deploys the browser installer from `web/` when changes land on `main`.
+
