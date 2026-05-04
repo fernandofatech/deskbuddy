@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Deskbuddy Installer</title>
+    <script type="module" src="https://unpkg.com/esp-web-tools@10/dist/web/install-button.js?module"></script>
+    <style>
+      :root {
+        color-scheme: dark;
+        font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        background: #0b1018;
+        color: #eef4fb;
+      }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        background: #0b1018;
+      }
+      main {
+        max-width: 760px;
+        margin: 0 auto;
+        padding: 48px 18px;
+      }
+      h1 {
+        margin: 0 0 10px;
+        font-size: 38px;
+        letter-spacing: 0;
+      }
+      p {
+        color: #a8b7c7;
+        line-height: 1.6;
+      }
+      .panel {
+        margin-top: 28px;
+        padding: 22px;
+        border: 1px solid #263548;
+        border-radius: 8px;
+        background: #121a26;
+      }
+      .meta {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+        gap: 12px;
+        margin: 24px 0;
+      }
+      .meta div {
+        border: 1px solid #263548;
+        border-radius: 8px;
+        padding: 14px;
+        background: #0e1520;
+      }
+      strong {
+        display: block;
+        margin-bottom: 5px;
+        color: #f8fbff;
+      }
+      esp-web-install-button {
+        display: block;
+        margin-top: 18px;
+      }
+      code {
+        color: #7dd3fc;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Deskbuddy Installer</h1>
+      <p>Flash Deskbuddy directly to a compatible ESP32 touchscreen board from Chrome or Edge using Web Serial.</p>
+
+      <section class="panel">
+        <div class="meta">
+          <div>
+            <strong>Tested board</strong>
+            ESP32-2432S028R CYD
+          </div>
+          <div>
+            <strong>Display</strong>
+            2.8 inch ILI9341, 240 x 320
+          </div>
+          <div>
+            <strong>Touch</strong>
+            XPT2046
+          </div>
+        </div>
+
+        <esp-web-install-button manifest="manifest.json">
+          <button slot="activate">Install Deskbuddy</button>
+        </esp-web-install-button>
+
+        <p>After flashing, use the on-device <code>Setup</code> page or the local web interface to configure Wi-Fi, city, brightness, and live content.</p>
+      </section>
+    </main>
+  </body>
+</html>

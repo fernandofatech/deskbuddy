@@ -1,0 +1,85 @@
+name: Build firmware and Pages installer
+
+on:
+  push:
+    branches:
+      - main
+      - "codex/**"
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Arduino CLI
+        uses: arduino/setup-arduino-cli@v2
+
+      - name: Configure Arduino cores
+        run: |
+          arduino-cli config init
+          arduino-cli config add board_manager.additional_urls https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json
+          arduino-cli core update-index
+          arduino-cli core install esp32:esp32
+
+      - name: Install libraries
+        run: |
+          arduino-cli lib install TFT_eSPI
+          arduino-cli lib install ArduinoJson
+          arduino-cli lib install XPT2046_Touchscreen
+          arduino-cli lib install WiFiManager
+          cp User_Setup.h ~/Arduino/libraries/TFT_eSPI/User_Setup.h
+
+      - name: Compile firmware
+        run: |
+          arduino-cli compile \
+            --fqbn esp32:esp32:jczn_2432s028r:PartitionScheme=huge_app,UploadSpeed=115200 \
+            --export-binaries \
+            --output-dir build \
+            Deskbuddy
+
+      - name: Prepare Pages artifact
+        run: |
+          mkdir -p public/firmware
+          touch public/.nojekyll
+          cp -R web/* public/
+          cp build/Deskbuddy.ino.merged.bin public/firmware/deskbuddy-esp32-2432s028r-cyd.bin
+
+      - name: Upload firmware artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: deskbuddy-firmware
+          path: |
+            build/Deskbuddy.ino.bin
+            build/Deskbuddy.ino.bootloader.bin
+            build/Deskbuddy.ino.partitions.bin
+            build/Deskbuddy.ino.merged.bin
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: public
+
+  deploy-pages:
+    if: github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

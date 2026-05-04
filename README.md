@@ -20,6 +20,19 @@ The working display configuration for this board is included in [`User_Setup.h`]
 
 If your screen stays white, make sure the included `User_Setup.h` has been copied into the installed `TFT_eSPI` library folder, replacing the library's default setup file.
 
+## Current Features
+
+- Touch dashboard with Home, Weather, Notes, Status, and Setup pages
+- On-device Setup page for brightness, city presets, live content mode, and Wi-Fi setup portal
+- Browser settings page for notes, theme, widgets, location, timers, brightness, and content mode
+- Weather from Open-Meteo
+- Sunrise and sunset from sunrise-sunset.org
+- KP index from NOAA
+- Optional quote card from Quotable
+- Optional technology headline from Hacker News Algolia
+- GitHub Actions firmware build
+- GitHub Pages Web Serial installer
+
 ## Wi-Fi Credentials
 
 Do not hardcode Wi-Fi credentials in the sketch.
@@ -52,6 +65,7 @@ Install these Arduino libraries:
 - `TFT_eSPI`
 - `ArduinoJson`
 - `XPT2046_Touchscreen`
+- `WiFiManager`
 
 Before compiling, replace the installed TFT_eSPI setup file with this repo's `User_Setup.h`.
 
@@ -64,3 +78,17 @@ On macOS with `arduino-cli`, the TFT_eSPI setup file is usually:
 ## Notes
 
 The firmware exposes a local web interface after the ESP32 connects to Wi-Fi. Use the serial monitor at `115200` baud to inspect boot logs and find the device IP address.
+
+If Wi-Fi is not configured, open the on-device `Setup` page and tap the Wi-Fi card. Deskbuddy starts a temporary access point named `Deskbuddy Setup`; connect from a phone or computer and choose the desired Wi-Fi network.
+
+## GitHub Pages Installer
+
+The workflow in `.github/workflows/build-and-pages.yml` compiles the firmware and publishes a Web Serial installer from the `web/` folder when changes land on `main`.
+
+The installer expects a generated merged firmware binary at:
+
+```text
+firmware/deskbuddy-esp32-2432s028r-cyd.bin
+```
+
+GitHub Actions creates that file from the Arduino CLI build output.

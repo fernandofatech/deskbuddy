@@ -9,6 +9,7 @@
 // - Uptime added to Status page
 
 #include <WiFi.h>
+#include <WiFiManager.h>
 #include <HTTPClient.h>
 #include <WiFiClientSecure.h>
 #include <TFT_eSPI.h>
@@ -37,6 +38,12 @@
 
 const char* WIFI_SSID = DESKBUDDY_WIFI_SSID;
 const char* WIFI_PASS = DESKBUDDY_WIFI_PASS;
+
+static bool hasStaticWifiCredentials() {
+  return String(WIFI_SSID) != "YOUR_WIFI_SSID" &&
+         String(WIFI_PASS) != "YOUR_WIFI_PASSWORD" &&
+         String(WIFI_SSID).length() > 0;
+}
 
 // =========================================================
 // DISPLAY / TOUCH
@@ -168,8 +175,11 @@ enum Page {
   PAGE_HOME = 0,
   PAGE_WEATHER = 1,
   PAGE_NOTES = 2,
-  PAGE_STATUS = 3
+  PAGE_STATUS = 3,
+  PAGE_SETTINGS = 4
 };
+
+const int NAV_COUNT = 5;
 
 Page currentPage = PAGE_HOME;
 Page lastDrawnPage = (Page)-1;
@@ -212,6 +222,8 @@ String lastNextSunLabel = "";
 String lastNextSunTime = "";
 String lastNotesText = "";
 String lastNetworkToggleText = "";
+String lastSettingsText = "";
+String lastInsightText = "";
 
 const char* homeWidgetKey(HomeWidgetType type) {
   switch (type) {
@@ -318,6 +330,23 @@ bool wifiEnabled = true;
 bool wifiConnectInProgress = false;
 unsigned long wifiConnectStartedMs = 0;
 const unsigned long WIFI_CONNECT_TIMEOUT_MS = 15000UL;
+bool wifiPortalRequested = false;
+
+struct CityPreset {
+  const char* name;
+  float lat;
+  float lng;
+};
+
+const CityPreset CITY_PRESETS[] = {
+  {"Berlin", 52.5200f, 13.4050f},
+  {"Sao Paulo", -23.5505f, -46.6333f},
+  {"New York", 40.7128f, -74.0060f},
+  {"London", 51.5072f, -0.1276f},
+  {"Tokyo", 35.6762f, 139.6503f},
+  {"Lisbon", 38.7223f, -9.1393f}
+};
+const int CITY_PRESET_COUNT = sizeof(CITY_PRESETS) / sizeof(CITY_PRESETS[0]);
 
 // Weather
 static float tempC = NAN;
@@ -341,6 +370,14 @@ static int sunsetMin  = -1;
 static int lastSunYmd = -1;
 static time_t lastSyncTime = 0;
 
+// Public content
+String contentMode = "quote"; // quote, tech, off
+String insightTitle = "Deskbuddy";
+String insightBody = "Tap Setup to choose quotes, tech headlines, city, Wi-Fi, and brightness.";
+String insightSource = "Local";
+static time_t lastInsightFetch = 0;
+static const uint32_t INSIGHT_INTERVAL_SEC = 60 * 60;
+
 // =========================================================
 // SLEEP / BACKLIGHT
 // =========================================================
@@ -355,7 +392,7 @@ unsigned long lastInteractionMs = 0;
 int sleepIntervalMin = 10;
 int sleepOffDelaySec = 60;
 
-const int BL_FULL = 255;
+int BL_FULL = 255;
 const int BL_DIM  = 18;
 const int BL_OFF  = 0;
 const int FLASH_BL_LOW = 20;
@@ -897,6 +934,9 @@ void loadStoredSettings() {
   regionFormatKey  = prefs.getString("region", "europe");
   flashModeEnabled = prefs.getBool("flashMode", false);
   wifiEnabled      = prefs.getBool("wifiEnabled", true);
+  BL_FULL          = constrain(prefs.getInt("brightness", 255), 30, 255);
+  contentMode      = prefs.getString("contentMode", "quote");
+  if (contentMode != "quote" && contentMode != "tech" && contentMode != "off") contentMode = "quote";
 
   for (int i = 0; i < HOME_SLOT_COUNT; i++) {
     String key = String("homeSlot") + String(i);
@@ -926,6 +966,7 @@ void resetDataCaches() {
   lastSunYmd = -1;
   lastWeatherFetch = 0;
   lastKpFetch = 0;
+  lastInsightFetch = 0;
   dataDirty = true;
   pageDirty = true;
 }
@@ -1132,6 +1173,72 @@ void ensureWeather() {
   }
 }
 
+bool fetchInsight() {
+  if (WiFi.status() != WL_CONNECTED || contentMode == "off") return false;
+
+  WiFiClientSecure client;
+  client.setInsecure();
+
+  String url = contentMode == "tech"
+    ? "https://hn.algolia.com/api/v1/search_by_date?tags=story&query=technology"
+    : "https://api.quotable.io/random?maxLength=120";
+
+  HTTPClient http;
+  if (!http.begin(client, url)) return false;
+
+  int code = http.GET();
+  if (code != 200) {
+    http.end();
+    return false;
+  }
+
+  String body = http.getString();
+  http.end();
+
+  DynamicJsonDocument doc(contentMode == "tech" ? 8192 : 2048);
+  if (deserializeJson(doc, body)) return false;
+
+  if (contentMode == "tech") {
+    JsonArray hits = doc["hits"];
+    if (!hits || hits.size() == 0) return false;
+    const char* title = hits[0]["title"] | hits[0]["story_title"] | nullptr;
+    if (!title) return false;
+    insightTitle = "Tech pulse";
+    insightBody = String(title);
+    insightSource = "Hacker News";
+  } else {
+    const char* content = doc["content"] | nullptr;
+    const char* author = doc["author"] | "Unknown";
+    if (!content) return false;
+    insightTitle = String(author);
+    insightBody = String(content);
+    insightSource = "Quotable";
+  }
+
+  if (insightBody.length() > 180) insightBody = insightBody.substring(0, 177) + "...";
+  lastInsightFetch = time(nullptr);
+  lastSyncTime = lastInsightFetch;
+  return true;
+}
+
+void ensureInsight() {
+  if (contentMode == "off") {
+    insightTitle = "Live card off";
+    insightBody = "Enable quotes or tech headlines from Setup.";
+    insightSource = "Local";
+    return;
+  }
+
+  time_t nowT = time(nullptr);
+  if ((lastInsightFetch == 0 || (nowT - lastInsightFetch) > INSIGHT_INTERVAL_SEC) &&
+      WiFi.status() == WL_CONNECTED) {
+    if (fetchInsight()) {
+      notesDirty = true;
+      dataDirty = true;
+    }
+  }
+}
+
 bool fetchKpIndex() {
   if (WiFi.status() != WL_CONNECTED) return false;
 
@@ -1218,10 +1325,10 @@ void drawNavBar() {
   tft.fillRect(0, y, SCREEN_W, NAV_H, COL_PANEL_ALT);
   tft.drawFastHLine(0, y, SCREEN_W, COL_STROKE);
 
-  const int btnW = SCREEN_W / 4;
-  const char* names[4] = {"Home", "Weather", "Notes", "Status"};
+  const int btnW = SCREEN_W / NAV_COUNT;
+  const char* names[NAV_COUNT] = {"Home", "Wx", "Notes", "Status", "Setup"};
 
-  for (int i = 0; i < 4; i++) {
+  for (int i = 0; i < NAV_COUNT; i++) {
     int bx = i * btnW;
     bool active = ((int)currentPage == i);
 
@@ -1820,18 +1927,32 @@ void drawNotesPageFull() {
   drawTopBar("Notes");
   drawNavBar();
 
-  drawCard(8, 42, 224, 226, true);
+  drawCard(8, 42, 224, 104, true);
+  drawCard(8, 154, 224, 114, true);
 
   pageDirty = false;
   lastDrawnPage = PAGE_NOTES;
   lastNotesText = "";
+  lastInsightText = "";
 }
 
 void updateNotesDynamic() {
-  if (notesText != lastNotesText || notesDirty) {
-    tft.fillRect(18, 54, 204, 196, COL_PANEL);
-    drawWrappedTextLimited(18, 54, 198, notesText, 2, COL_TEXT, COL_PANEL, 12);
+  String insightKey = insightTitle + "|" + insightBody + "|" + insightSource;
+  if (notesText != lastNotesText || insightKey != lastInsightText || notesDirty) {
+    tft.fillRect(18, 54, 204, 78, COL_PANEL);
+    tft.setTextColor(COL_DIM, COL_PANEL);
+    tft.drawString("Notes", 18, 54, 2);
+    drawWrappedTextLimited(18, 76, 198, notesText, 2, COL_TEXT, COL_PANEL, 4);
+
+    tft.fillRect(18, 166, 204, 88, COL_PANEL);
+    tft.setTextColor(COL_ACCENT, COL_PANEL);
+    tft.drawString(insightTitle, 18, 166, 2);
+    drawWrappedTextLimited(18, 188, 198, insightBody, 2, COL_TEXT, COL_PANEL, 4);
+    tft.setTextColor(COL_DIM, COL_PANEL);
+    tft.drawString(insightSource, 18, 246, 1);
+
     lastNotesText = notesText;
+    lastInsightText = insightKey;
     notesDirty = false;
   }
 }
@@ -1918,12 +2039,110 @@ void updateStatusDynamic() {
   }
 }
 
+String contentModeLabel() {
+  if (contentMode == "tech") return "Tech";
+  if (contentMode == "off") return "Off";
+  return "Quote";
+}
+
+int currentCityPresetIndex() {
+  for (int i = 0; i < CITY_PRESET_COUNT; i++) {
+    if (fabsf(LAT - CITY_PRESETS[i].lat) < 0.02f && fabsf(LNG - CITY_PRESETS[i].lng) < 0.02f) return i;
+  }
+  return 0;
+}
+
+void saveCurrentLocation() {
+  prefs.putString("locname", locationName);
+  prefs.putFloat("lat", LAT);
+  prefs.putFloat("lng", LNG);
+  resetDataCaches();
+}
+
+void applyCityPreset(int direction) {
+  int idx = currentCityPresetIndex();
+  idx = (idx + direction + CITY_PRESET_COUNT) % CITY_PRESET_COUNT;
+  locationName = CITY_PRESETS[idx].name;
+  LAT = CITY_PRESETS[idx].lat;
+  LNG = CITY_PRESETS[idx].lng;
+  saveCurrentLocation();
+}
+
+void cycleContentMode() {
+  if (contentMode == "quote") contentMode = "tech";
+  else if (contentMode == "tech") contentMode = "off";
+  else contentMode = "quote";
+  prefs.putString("contentMode", contentMode);
+  lastInsightFetch = 0;
+  lastInsightText = "";
+  notesDirty = true;
+  pageDirty = true;
+  ensureInsight();
+}
+
+void adjustBrightness(int delta) {
+  BL_FULL = constrain(BL_FULL + delta, 30, 255);
+  prefs.putInt("brightness", BL_FULL);
+  if (!sleepOff && !sleepDimmed) setBacklight(BL_FULL);
+  lastSettingsText = "";
+  pageDirty = true;
+}
+
+void drawSettingsPageFull() {
+  tft.fillScreen(COL_BG);
+  drawTopBar("Setup");
+  drawNavBar();
+
+  drawCard(8, PAGE_ROW1_Y, 224, PAGE_WIDGET_H, true);
+  drawCard(8, PAGE_ROW2_Y, 224, PAGE_WIDGET_H, true);
+  drawCard(8, PAGE_ROW3_Y, 108, PAGE_WIDGET_H, true);
+  drawCard(124, PAGE_ROW3_Y, 108, PAGE_WIDGET_H, true);
+
+  pageDirty = false;
+  lastDrawnPage = PAGE_SETTINGS;
+  lastSettingsText = "";
+}
+
+void updateSettingsDynamic() {
+  String key = String(BL_FULL) + "|" + locationName + "|" + contentMode + "|" + wifiStatusText();
+  if (key == lastSettingsText) return;
+
+  tft.fillRect(18, PAGE_ROW1_Y + 8, 204, 54, COL_PANEL);
+  tft.setTextColor(COL_DIM, COL_PANEL);
+  tft.drawString("Brightness", 18, PAGE_ROW1_Y + 8, 2);
+  tft.setTextColor(COL_TEXT, COL_PANEL);
+  tft.drawString("-     " + String((BL_FULL * 100) / 255) + "%     +", 24, PAGE_ROW1_Y + 34, 2);
+
+  tft.fillRect(18, PAGE_ROW2_Y + 8, 204, 54, COL_PANEL);
+  tft.setTextColor(COL_DIM, COL_PANEL);
+  tft.drawString("City", 18, PAGE_ROW2_Y + 8, 2);
+  tft.setTextColor(COL_TEXT, COL_PANEL);
+  tft.drawString("< " + locationName + " >", 18, PAGE_ROW2_Y + 34, 2);
+
+  tft.fillRect(18, PAGE_ROW3_Y + 8, 88, 54, COL_PANEL);
+  tft.setTextColor(COL_DIM, COL_PANEL);
+  tft.drawString("Live card", 18, PAGE_ROW3_Y + 8, 2);
+  tft.setTextColor(COL_TEXT, COL_PANEL);
+  tft.drawString(contentModeLabel(), 18, PAGE_ROW3_Y + 34, 2);
+
+  tft.fillRect(134, PAGE_ROW3_Y + 8, 88, 54, COL_PANEL);
+  tft.setTextColor(COL_DIM, COL_PANEL);
+  tft.drawString("WiFi", 134, PAGE_ROW3_Y + 8, 2);
+  tft.setTextColor(statusColor(), COL_PANEL);
+  tft.drawString(wifiStatusText(), 134, PAGE_ROW3_Y + 30, 1);
+  tft.setTextColor(COL_ACCENT, COL_PANEL);
+  tft.drawString("Setup AP", 134, PAGE_ROW3_Y + 46, 1);
+
+  lastSettingsText = key;
+}
+
 void drawCurrentPageFull() {
   switch (currentPage) {
     case PAGE_HOME:    drawHomePageFull(); break;
     case PAGE_WEATHER: drawWeatherPageFull(); break;
     case PAGE_NOTES:   drawNotesPageFull(); break;
     case PAGE_STATUS:  drawStatusPageFull(); break;
+    case PAGE_SETTINGS: drawSettingsPageFull(); break;
   }
 
   if (focusMenuOpen && currentPage == PAGE_HOME) drawFocusMenuOverlay(true);
@@ -1946,6 +2165,7 @@ void updateCurrentPageDynamic() {
     case PAGE_WEATHER: updateWeatherDynamic(); break;
     case PAGE_NOTES:   updateNotesDynamic(); break;
     case PAGE_STATUS:  updateStatusDynamic(); break;
+    case PAGE_SETTINGS: updateSettingsDynamic(); break;
   }
 }
 
@@ -2045,15 +2265,44 @@ bool handleStatusTouch(int x, int y) {
   return false;
 }
 
+bool handleSettingsTouch(int x, int y) {
+  if (currentPage != PAGE_SETTINGS) return false;
+
+  if (y >= PAGE_ROW1_Y && y < PAGE_ROW1_Y + PAGE_WIDGET_H) {
+    if (x < 88) adjustBrightness(-25);
+    else if (x > 152) adjustBrightness(25);
+    return true;
+  }
+
+  if (y >= PAGE_ROW2_Y && y < PAGE_ROW2_Y + PAGE_WIDGET_H) {
+    applyCityPreset(x < SCREEN_W / 2 ? -1 : 1);
+    return true;
+  }
+
+  if (x >= 8 && x < 116 && y >= PAGE_ROW3_Y && y < PAGE_ROW3_Y + PAGE_WIDGET_H) {
+    cycleContentMode();
+    return true;
+  }
+
+  if (x >= 124 && x < 232 && y >= PAGE_ROW3_Y && y < PAGE_ROW3_Y + PAGE_WIDGET_H) {
+    wifiPortalRequested = true;
+    lastSettingsText = "";
+    pageDirty = true;
+    return true;
+  }
+
+  return false;
+}
+
 // =========================================================
 // NAVIGATION
 // =========================================================
 void handleNavTouch(int x, int y) {
   if (y < SCREEN_H - NAV_H) return;
 
-  int btnW = SCREEN_W / 4;
+  int btnW = SCREEN_W / NAV_COUNT;
   int idx = x / btnW;
-  if (idx < 0 || idx > 3) return;
+  if (idx < 0 || idx >= NAV_COUNT) return;
 
   Page newPage = (Page)idx;
   if (newPage != currentPage) {
@@ -2073,6 +2322,8 @@ void handleRoot() {
   String region = prefs.getString("region", "europe");
   String nickname = prefs.getString("nickname", "");
   bool flashMode = prefs.getBool("flashMode", false);
+  int brightness = prefs.getInt("brightness", BL_FULL);
+  String liveMode = prefs.getString("contentMode", contentMode);
   String homeSlotKeys[HOME_SLOT_COUNT];
   for (int i = 0; i < HOME_SLOT_COUNT; i++) {
     homeSlotKeys[i] = prefs.getString((String("homeSlot") + String(i)).c_str(), homeWidgetKey(homeWidgetSlots[i]));
@@ -2233,6 +2484,12 @@ void handleRoot() {
   page += "<option value='30'" + String(sleepIntervalMin==30?" selected":"") + ">30 minutes</option>";
   page += "<option value='60'" + String(sleepIntervalMin==60?" selected":"") + ">1 hour</option>";
   page += "</select><div class='muted' style='margin-top:8px;'>Sleep dims the screen first, then turns it fully off after 60 seconds.</div></div>";
+  page += "<div><label class='label'>Brightness</label><input type='range' min='30' max='255' name='brightness' value='" + String(brightness) + "'></div>";
+  page += "<div><label class='label'>Live card</label><select name='contentMode'>";
+  page += "<option value='quote'" + String(liveMode=="quote"?" selected":"") + ">Quote of the moment</option>";
+  page += "<option value='tech'" + String(liveMode=="tech"?" selected":"") + ">Technology headline</option>";
+  page += "<option value='off'" + String(liveMode=="off"?" selected":"") + ">Off</option>";
+  page += "</select></div>";
   page += "<div><label class='label'>Measurement system</label><select name='units'>";
   page += "<option value='metric'"   + String(units=="metric"?" selected":"")   + ">Celsius / mm</option>";
   page += "<option value='imperial'" + String(units=="imperial"?" selected":"") + ">Fahrenheit / inches</option>";
@@ -2322,6 +2579,7 @@ void handleSave() {
   String newRegion = server.hasArg("region") ? server.arg("region") : "europe";
   String newLoc    = server.hasArg("locname") ? server.arg("locname") : locationName;
   String newNickname = server.hasArg("nickname") ? server.arg("nickname") : buddyNickname;
+  String newContentMode = server.hasArg("contentMode") ? server.arg("contentMode") : contentMode;
   HomeWidgetType newHomeSlots[HOME_SLOT_COUNT];
   for (int i = 0; i < HOME_SLOT_COUNT; i++) {
     String key = String("homeSlot") + String(i);
@@ -2342,9 +2600,11 @@ void handleSave() {
   if (newNickname.length() > 24) newNickname = newNickname.substring(0, 24);
   if (newUnits != "metric" && newUnits != "imperial") newUnits = "metric";
   if (newRegion != "europe" && newRegion != "us") newRegion = "europe";
+  if (newContentMode != "quote" && newContentMode != "tech" && newContentMode != "off") newContentMode = "quote";
 
   int newSleepMin = server.hasArg("sleepMin") ? server.arg("sleepMin").toInt() : sleepIntervalMin;
   sleepIntervalMin = constrain(newSleepMin, 0, 120);
+  BL_FULL = constrain(server.hasArg("brightness") ? server.arg("brightness").toInt() : BL_FULL, 30, 255);
   bool newFlashMode = server.hasArg("flashMode");
 
   bool locationChanged =
@@ -2359,6 +2619,7 @@ void handleSave() {
   LNG = newLng;
   unitKey = newUnits;
   regionFormatKey = newRegion;
+  contentMode = newContentMode;
   flashModeEnabled = newFlashMode;
   for (int i = 0; i < HOME_SLOT_COUNT; i++) {
     homeWidgetSlots[i] = newHomeSlots[i];
@@ -2378,10 +2639,12 @@ void handleSave() {
   prefs.putString("units", unitKey);
   prefs.putString("region", regionFormatKey);
   prefs.putString("nickname", buddyNickname);
+  prefs.putString("contentMode", contentMode);
   prefs.putString("locname", locationName);
   prefs.putFloat("lat", LAT);
   prefs.putFloat("lng", LNG);
   prefs.putInt("sleepMin", sleepIntervalMin);
+  prefs.putInt("brightness", BL_FULL);
   prefs.putBool("flashMode", flashModeEnabled);
   for (int i = 0; i < HOME_SLOT_COUNT; i++) {
     String key = String("homeSlot") + String(i);
@@ -2421,6 +2684,9 @@ void handleSave() {
   lastUptimeText = "";
 
   if (locationChanged) resetDataCaches();
+  lastInsightFetch = 0;
+  lastInsightText = "";
+  ensureInsight();
 
   server.sendHeader("Location", "/");
   server.send(303);
@@ -2454,9 +2720,29 @@ void beginWiFiConnect() {
 
   WiFi.mode(WIFI_STA);
   WiFi.setSleep(false);
-  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  if (hasStaticWifiCredentials()) {
+    WiFi.begin(WIFI_SSID, WIFI_PASS);
+  } else {
+    WiFi.begin();
+  }
   wifiConnectInProgress = true;
   wifiConnectStartedMs = millis();
+}
+
+void startWifiPortal() {
+  wifiConnectInProgress = false;
+  WiFiManager wm;
+  wm.setConfigPortalTimeout(180);
+  wm.setConnectTimeout(20);
+  wm.setConfigPortalBlocking(true);
+  tft.fillScreen(COL_BG);
+  drawTopBar("WiFi setup");
+  tft.setTextColor(COL_TEXT, COL_BG);
+  drawWrappedTextLimited(18, 58, 204, "Connect your phone to Deskbuddy Setup, choose Wi-Fi, then return here.", 2, COL_TEXT, COL_BG, 8);
+  wm.startConfigPortal("Deskbuddy Setup");
+  beginWiFiConnect();
+  pageDirty = true;
+  lastSettingsText = "";
 }
 
 void connectWiFi(bool waitForConnection = true) {
@@ -2479,6 +2765,7 @@ void updateWiFiConnectionState() {
     ensureSunTimesForToday();
     ensureWeather();
     ensureKpIndex();
+    ensureInsight();
     dataDirty = true;
     pageDirty = true;
     return;
@@ -2546,6 +2833,7 @@ void setup() {
   ensureSunTimesForToday();
   ensureWeather();
   ensureKpIndex();
+  ensureInsight();
 
   setupWebServer();
 
@@ -2569,6 +2857,11 @@ void loop() {
   updateFocusTimerState();
   updateTimerDoneDialogState();
   handleAutoSleep();
+
+  if (wifiPortalRequested) {
+    wifiPortalRequested = false;
+    startWifiPortal();
+  }
 
   int tx = 0, ty = 0;
   if (touchNewPress(tx, ty)) {
@@ -2598,12 +2891,12 @@ void loop() {
         if (!manualDimMode) {
           wakeDisplay();
         } else {
-          if (!handleHomeTouch(tx, ty) && !handleStatusTouch(tx, ty)) {
+          if (!handleHomeTouch(tx, ty) && !handleStatusTouch(tx, ty) && !handleSettingsTouch(tx, ty)) {
             handleNavTouch(tx, ty);
           }
         }
       } else {
-        if (!handleHomeTouch(tx, ty) && !handleStatusTouch(tx, ty)) {
+        if (!handleHomeTouch(tx, ty) && !handleStatusTouch(tx, ty) && !handleSettingsTouch(tx, ty)) {
           handleNavTouch(tx, ty);
         }
       }
@@ -2615,6 +2908,7 @@ void loop() {
     ensureSunTimesForToday();
     ensureWeather();
     ensureKpIndex();
+    ensureInsight();
   }
 
   if (pageDirty || lastDrawnPage != currentPage) {
