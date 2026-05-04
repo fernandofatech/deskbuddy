@@ -224,7 +224,7 @@ unsigned long lastHomeTickerTick = 0;
 const unsigned long HOME_TICKER_TICK_MS = 160UL;
 int homeShowSlide = 0;
 unsigned long lastHomeShowSlideMs = 0;
-const int HOME_SHOW_SLIDE_COUNT = 4;
+const int HOME_SHOW_SLIDE_COUNT = 5;
 const unsigned long HOME_SHOW_SLIDE_MS = 12000UL;
 
 String lastWifiText = "";
@@ -636,6 +636,41 @@ static String weatherShortText(int code) {
   String label = weatherConditionText(code);
   if (label == "Updating") return "--";
   return label;
+}
+
+struct DailyReading {
+  const char* ref;
+  const char* text;
+  const char* prompt;
+};
+
+static const DailyReading DAILY_READINGS[] = {
+  {"Psalm 23", "The Lord guides, restores strength, and keeps the path steady.", "Start with one calm step."},
+  {"Psalm 46", "God is a present refuge when the day feels noisy or heavy.", "Pause, breathe, continue."},
+  {"Psalm 91", "Rest under God's care; courage grows when fear gets smaller.", "Choose trust before speed."},
+  {"Psalm 121", "Help comes from the Maker who watches over every ordinary hour.", "Look up before reacting."},
+  {"Proverbs 3", "Wisdom begins with trust, humility, and a straight path.", "Make the next decision clean."},
+  {"Matthew 6", "Today has enough weight; receive grace for this day.", "Do today well."},
+  {"Philippians 4", "Peace guards the heart when prayer replaces anxious loops.", "Turn worry into prayer."},
+  {"Isaiah 40", "Those who wait on the Lord renew strength for the road ahead.", "Renew, then move."},
+  {"Psalm 27", "Light and courage are stronger than fear.", "Stand firm with a quiet heart."},
+  {"James 1", "Ask for wisdom with faith, and walk with patience.", "Choose wisdom over hurry."},
+  {"Romans 12", "Renew the mind and serve with practical love.", "Do useful good today."},
+  {"Psalm 34", "The Lord is near to the brokenhearted and attentive to humble prayer.", "Bring the hard part to God."},
+  {"Colossians 3", "Work with sincerity, gratitude, and a higher purpose.", "Make the work worshipful."},
+  {"John 14", "Do not let the heart be troubled; peace is offered again.", "Receive peace before tasks."}
+};
+
+static int dailyReadingIndex() {
+  time_t now = time(nullptr);
+  if (now < 1600000000) return 0;
+  struct tm tmNow;
+  localtime_r(&now, &tmNow);
+  return tmNow.tm_yday % (sizeof(DAILY_READINGS) / sizeof(DAILY_READINGS[0]));
+}
+
+static DailyReading dailyReading() {
+  return DAILY_READINGS[dailyReadingIndex()];
 }
 
 static String kpText() {
@@ -1656,6 +1691,89 @@ void drawMoonIcon(TFT_eSprite& spr, int cx, int cy, uint16_t c) {
   spr.fillCircle(cx + 4, cy - 2, 6, COL_PANEL);
 }
 
+void drawWeatherSun(int cx, int cy, int r, uint16_t fg, uint16_t bg) {
+  tft.fillCircle(cx, cy, r, fg);
+  for (int i = 0; i < 8; i++) {
+    float a = i * 0.785398f;
+    int x1 = cx + (int)(cosf(a) * (r + 4));
+    int y1 = cy + (int)(sinf(a) * (r + 4));
+    int x2 = cx + (int)(cosf(a) * (r + 10));
+    int y2 = cy + (int)(sinf(a) * (r + 10));
+    tft.drawLine(x1, y1, x2, y2, fg);
+  }
+  tft.drawCircle(cx, cy, r + 1, bg);
+}
+
+void drawWeatherCloud(int cx, int cy, int scale, uint16_t fg, uint16_t bg) {
+  int r = scale;
+  tft.fillCircle(cx - r, cy + 2, r, fg);
+  tft.fillCircle(cx + 2, cy - 3, r + 3, fg);
+  tft.fillCircle(cx + r + 5, cy + 3, r - 1, fg);
+  tft.fillRoundRect(cx - r * 2, cy + 2, r * 4 + 8, r + 9, 5, fg);
+  tft.drawFastHLine(cx - r * 2, cy + r + 11, r * 4 + 8, bg);
+}
+
+void drawWeatherRain(int cx, int cy, int scale, uint16_t fg) {
+  int len = max(4, scale + 2);
+  for (int i = -1; i <= 1; i++) {
+    int x = cx + i * scale;
+    tft.drawLine(x, cy, x - max(1, scale / 2), cy + len, fg);
+  }
+}
+
+void drawWeatherSnow(int cx, int cy, int scale, uint16_t fg) {
+  int len = max(2, scale / 2);
+  for (int i = -1; i <= 1; i++) {
+    int x = cx + i * scale;
+    tft.drawLine(x - len, cy + len, x + len, cy + len * 2, fg);
+    tft.drawLine(x + len, cy + len, x - len, cy + len * 2, fg);
+  }
+}
+
+void drawWeatherIcon(int cx, int cy, int code, int size, uint16_t bg) {
+  uint16_t sun = COL_YELLOW;
+  uint16_t cloud = COL_TEXT;
+  uint16_t rain = COL_ACCENT;
+  int r = max(2, size / 5);
+  if (code < 0) {
+    tft.drawCircle(cx, cy, r + 6, COL_DIM);
+    tft.drawLine(cx - 5, cy, cx + 5, cy, COL_DIM);
+    return;
+  }
+  if (code == 0) {
+    drawWeatherSun(cx, cy, r + 2, sun, bg);
+    return;
+  }
+  if (code <= 3) {
+    if (code <= 2) drawWeatherSun(cx - r, cy - r, r, sun, bg);
+    drawWeatherCloud(cx + 1, cy + 1, r, cloud, bg);
+    return;
+  }
+  if (code == 45 || code == 48) {
+    drawWeatherCloud(cx, cy - 2, r, cloud, bg);
+    tft.drawFastHLine(cx - size / 2, cy + r + 9, size, COL_DIM);
+    tft.drawFastHLine(cx - size / 3, cy + r + 15, size * 2 / 3, COL_DIM);
+    return;
+  }
+  if ((code >= 51 && code <= 67) || (code >= 80 && code <= 82)) {
+    drawWeatherCloud(cx, cy - 3, r, cloud, bg);
+    drawWeatherRain(cx, cy + r + 9, r + 3, rain);
+    return;
+  }
+  if ((code >= 71 && code <= 77) || (code >= 85 && code <= 86)) {
+    drawWeatherCloud(cx, cy - 3, r, cloud, bg);
+    drawWeatherSnow(cx, cy + r + 7, r + 3, rain);
+    return;
+  }
+  if (code >= 95) {
+    drawWeatherCloud(cx, cy - 5, r, cloud, bg);
+    tft.fillTriangle(cx - 2, cy + r + 5, cx + 8, cy + r + 5, cx, cy + r + 18, COL_YELLOW);
+    tft.fillTriangle(cx, cy + r + 13, cx + 9, cy + r + 13, cx - 2, cy + r + 28, COL_YELLOW);
+    return;
+  }
+  drawWeatherCloud(cx, cy, r, cloud, bg);
+}
+
 int drawWrappedTextLimited(int x, int y, int maxW, const String& text, int font, uint16_t fg, uint16_t bg, int maxLines) {
   tft.setTextDatum(TL_DATUM);
   tft.setTextColor(fg, bg);
@@ -2103,6 +2221,7 @@ void drawHomeOverviewSlide() {
   tft.setTextColor(COL_DIM, COL_PANEL);
   tft.drawString(formatDateParts(tmNow), 20, 110, 2);
   tft.setTextColor(COL_TEXT, COL_PANEL);
+  drawWeatherIcon(168, 91, weatherCode, 34, COL_PANEL);
   tft.drawRightString(tempText().c_str(), 222, 78, 4);
   tft.setTextColor(COL_ACCENT, COL_PANEL);
   tft.drawRightString(weatherConditionText(weatherCode).substring(0, 12).c_str(), 222, 112, 1);
@@ -2134,6 +2253,7 @@ void drawHomeWeatherSlide() {
   drawShowCardTitle("Weather", lastSyncText());
   drawCard(8, 62, 224, 82, true);
   tft.fillRect(18, 72, 204, 58, COL_PANEL);
+  drawWeatherIcon(184, 97, weatherCode, 48, COL_PANEL);
   tft.setTextColor(COL_TEXT, COL_PANEL);
   tft.drawString(tempText(), 20, 74, 4);
   tft.setTextColor(COL_ACCENT, COL_PANEL);
@@ -2149,8 +2269,9 @@ void drawHomeWeatherSlide() {
     if (!hourlyForecasts[i].valid) continue;
     tft.setTextColor(COL_DIM, COL_PANEL);
     tft.drawCentreString(formatHourLabel(hourlyForecasts[i].minuteOfDay).c_str(), x + 18, 160, 1);
+    drawWeatherIcon(x + 18, 181, hourlyForecasts[i].weatherCode, 16, COL_PANEL);
     tft.setTextColor(COL_TEXT, COL_PANEL);
-    tft.drawCentreString(formatCompactTemp(hourlyForecasts[i].tempC).c_str(), x + 18, 174, 2);
+    tft.drawCentreString(formatCompactTemp(hourlyForecasts[i].tempC).c_str(), x + 18, 184, 1);
   }
 
   drawCard(8, 206, 224, 48, false);
@@ -2160,6 +2281,7 @@ void drawHomeWeatherSlide() {
     int x = 18 + i * 68;
     tft.setTextColor(i == 0 ? COL_TEXT : COL_DIM, COL_PANEL);
     tft.drawString(dailyForecasts[i].label.substring(0, 5), x, 214, 1);
+    drawWeatherIcon(x + 40, 220, dailyForecasts[i].weatherCode, 14, COL_PANEL);
     tft.setTextColor(COL_ACCENT, COL_PANEL);
     String range = formatCompactTemp(dailyForecasts[i].maxC) + "/" + formatCompactTemp(dailyForecasts[i].minC);
     tft.drawString(range, x, 230, 1);
@@ -2208,10 +2330,30 @@ void drawHomeLiveSlide() {
   tft.drawString(compactNoteText().substring(0, 34), 20, 240, 1);
 }
 
+void drawHomeBibleSlide() {
+  DailyReading reading = dailyReading();
+  drawShowCardTitle("Daily reading", reading.ref);
+  drawCard(8, 62, 224, 142, true);
+  tft.fillRect(18, 72, 204, 120, COL_PANEL);
+  tft.setTextColor(COL_ACCENT, COL_PANEL);
+  tft.drawString("Psalm of the day", 20, 76, 2);
+  tft.setTextColor(COL_TEXT, COL_PANEL);
+  tft.drawString(reading.ref, 20, 101, 4);
+  drawWrappedTextLimited(20, 138, 198, String(reading.text), 2, COL_TEXT, COL_PANEL, 4);
+
+  drawCard(8, 214, 224, 40, false);
+  tft.fillRect(18, 222, 204, 22, COL_PANEL);
+  tft.setTextColor(COL_DIM, COL_PANEL);
+  tft.drawString("Pause", 20, 224, 1);
+  tft.setTextColor(COL_ACCENT, COL_PANEL);
+  tft.drawString(String(reading.prompt).substring(0, 34), 20, 240, 1);
+}
+
 void drawHomeShowSlide(bool force = false) {
+  DailyReading reading = dailyReading();
   String key = String(homeShowSlide) + "|" + tempText() + "|" + weatherConditionText(weatherCode) + "|" +
                formatTimerClock(focusRemainingSec) + "|" + focusHintText() + "|" + insightTitle + "|" +
-               insightBody + "|" + insightStatus + "|" + compactNoteText();
+               insightBody + "|" + insightStatus + "|" + compactNoteText() + "|" + reading.ref + "|" + reading.text;
   for (int i = 0; i < CHECKLIST_COUNT; i++) {
     key += "|" + String(checklistDone[i] ? 1 : 0) + checklistItems[i];
   }
@@ -2223,6 +2365,7 @@ void drawHomeShowSlide(bool force = false) {
     case 1: drawHomeWeatherSlide(); break;
     case 2: drawHomeFocusSlide(); break;
     case 3: drawHomeLiveSlide(); break;
+    case 4: drawHomeBibleSlide(); break;
   }
   drawShowDots();
 }
@@ -2409,7 +2552,8 @@ void updateWeatherDynamic() {
   tft.fillRect(12, 44, 216, 70, COL_PANEL);
   tft.setTextColor(COL_DIM, COL_PANEL);
   tft.drawString(locationName, 18, 48, 2);
-  tft.drawString(weatherConditionText(weatherCode), 18, 68, 2);
+  drawWeatherIcon(108, 78, weatherCode, 34, COL_PANEL);
+  tft.drawString(weatherConditionText(weatherCode), 18, 72, 2);
 
   tft.setTextColor(COL_TEXT, COL_PANEL);
   tft.drawString(tempText(), 132, 50, 4);
@@ -2432,8 +2576,9 @@ void updateWeatherDynamic() {
     }
     tft.setTextColor(COL_DIM, COL_PANEL);
     tft.drawCentreString(formatHourLabel(hourlyForecasts[i].minuteOfDay).c_str(), x + 14, 146, 1);
+    drawWeatherIcon(x + 14, 160, hourlyForecasts[i].weatherCode, 12, COL_PANEL);
     tft.setTextColor(COL_TEXT, COL_PANEL);
-    tft.drawCentreString(formatCompactTemp(hourlyForecasts[i].tempC).c_str(), x + 14, 158, 2);
+    tft.drawCentreString(formatCompactTemp(hourlyForecasts[i].tempC).c_str(), x + 14, 164, 1);
     tft.setTextColor(COL_ACCENT, COL_PANEL);
     String pop = isnan(hourlyForecasts[i].precipProb) ? "--" : String((int)roundf(hourlyForecasts[i].precipProb)) + "%";
     tft.drawCentreString(pop.c_str(), x + 14, 176, 1);
@@ -2447,7 +2592,8 @@ void updateWeatherDynamic() {
     if (!dailyForecasts[i].valid) continue;
     tft.setTextColor(i == 0 ? COL_TEXT : COL_DIM, COL_PANEL);
     tft.drawString(dailyForecasts[i].label.substring(0, 5), 18, y, 1);
-    tft.drawString(weatherShortText(dailyForecasts[i].weatherCode).substring(0, 6), 70, y, 1);
+    drawWeatherIcon(74, y + 3, dailyForecasts[i].weatherCode, 8, COL_PANEL);
+    tft.drawString(weatherShortText(dailyForecasts[i].weatherCode).substring(0, 6), 86, y, 1);
     String range = formatCompactTemp(dailyForecasts[i].maxC) + "/" + formatCompactTemp(dailyForecasts[i].minC);
     tft.setTextColor(COL_TEXT, COL_PANEL);
     tft.drawRightString(range.c_str(), 176, y, 1);
@@ -2922,7 +3068,6 @@ void handleRoot() {
   String txt    = prefs.getString("text", "standard");
   String units  = prefs.getString("units", "metric");
   String region = prefs.getString("region", "europe");
-  String nickname = prefs.getString("nickname", "");
   bool flashMode = prefs.getBool("flashMode", false);
   int brightness = prefs.getInt("brightness", BL_FULL);
   String liveMode = prefs.getString("contentMode", contentMode);
@@ -2931,6 +3076,7 @@ void handleRoot() {
   for (int i = 0; i < HOME_SLOT_COUNT; i++) {
     homeSlotKeys[i] = prefs.getString((String("homeSlot") + String(i)).c_str(), homeWidgetKey(homeWidgetSlots[i]));
   }
+  DailyReading reading = dailyReading();
 
   String page;
   page.reserve(30000);
@@ -2951,6 +3097,10 @@ void handleRoot() {
   page += ".summary-card{border:1px solid #2c2f36;border-radius:18px;background:#15181d;padding:14px;min-height:74px;}";
   page += ".summary-card span{display:block;color:#9aa3ad;font-size:12px;margin-bottom:8px;}";
   page += ".summary-card strong{display:block;color:#f5f5f7;font-size:16px;line-height:1.25;}";
+  page += ".reading-card{grid-column:1 / -1;border:1px solid #334155;border-radius:16px;background:linear-gradient(145deg,#101820,#15181d);padding:14px;}";
+  page += ".reading-card span{display:block;color:#8ea3ba;font-size:12px;font-weight:700;margin-bottom:8px;}";
+  page += ".reading-card strong{display:block;color:#f5f5f7;font-size:18px;margin-bottom:8px;}";
+  page += ".reading-card p{margin:0;color:#b8c4d4;font-size:13px;line-height:1.45;}";
   page += ".layout{display:grid;grid-template-columns:1.15fr .85fr;gap:16px;align-items:start;}";
   page += ".stack{display:grid;gap:16px;}";
   page += ".panel{background:#15181d;border:1px solid #2c2f36;border-radius:18px;padding:18px;margin:0;}";
@@ -3003,7 +3153,7 @@ void handleRoot() {
   page += "<div class='summary'>";
   page += "<div class='summary-card'><span>Wi-Fi</span><strong>" + wifiStatusText() + "</strong></div>";
   page += "<div class='summary-card'><span>Weather</span><strong>" + tempText() + " / " + weatherConditionText(weatherCode) + "</strong></div>";
-  page += "<div class='summary-card'><span>Live</span><strong>" + contentModeLabel() + "</strong></div>";
+  page += "<div class='summary-card'><span>Psalm</span><strong>" + String(reading.ref) + "</strong></div>";
   page += "<div class='summary-card'><span>Sync</span><strong>" + lastSyncText() + "</strong></div>";
   page += "</div>";
 
@@ -3104,7 +3254,7 @@ void handleRoot() {
   page += "<div class='settings-block'>";
   page += "<span class='settings-title'>General</span>";
   page += "<div class='grid'>";
-  page += "<div><label class='label'>Buddy nickname</label><input name='nickname' maxlength='24' value='" + htmlEscape(nickname) + "'></div>";
+  page += "<div class='reading-card'><span>Daily Psalm</span><strong>" + String(reading.ref) + "</strong><p>" + htmlEscape(String(reading.text)) + "</p><p style='margin-top:8px;color:#67e8f9;'>" + htmlEscape(String(reading.prompt)) + "</p></div>";
   page += "<div><label class='label'>Auto sleep interval</label><select name='sleepMin'>";
   page += "<option value='0'"  + String(sleepIntervalMin==0?" selected":"")  + ">Never</option>";
   page += "<option value='1'"  + String(sleepIntervalMin==1?" selected":"")  + ">1 minute</option>";

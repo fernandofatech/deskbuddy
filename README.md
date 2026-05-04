@@ -1,6 +1,6 @@
 # Deskbuddy
 
-Deskbuddy turns a low-cost ESP32 touchscreen into a focused desk companion for work: clock, weather, notes, timer, Wi-Fi setup, brightness, live quotes, technology headlines, and a browser-based settings panel.
+Deskbuddy turns a low-cost ESP32 touchscreen into a focused desk companion for work: clock, weather icons, hourly and daily forecast, notes, checklist, timer, Wi-Fi setup, brightness, live quotes, technology headlines, daily psalm reading, and a browser-based settings panel.
 
 This fork is tuned for a clean, minimal interface on the CYD 2.8 inch display. The main goal is to make the device useful at a glance during the workday, without needing a phone or laptop tab open.
 
@@ -27,12 +27,13 @@ If the screen stays white, replace the installed TFT_eSPI `User_Setup.h` with th
 
 - Minimal touch UI with Home, Weather, Notes, Status, and Setup pages
 - Redesigned Home page with clock, weather, focus, note, and scrolling live ticker
-- Show Mode on Home with rotating large-format slides for clock, weather, focus, checklist, and live briefing
-- Apple-inspired Weather page with current conditions, hourly forecast, and 7-day forecast
+- Show Mode on Home with rotating large-format slides for clock, weather, focus, checklist, live briefing, and daily psalm
+- Apple-inspired Weather page with current conditions, drawn weather icons, hourly forecast, and 7-day forecast
 - Focus timer with configurable presets and completion alert
 - Notes card for quick daily reminders
 - Touch checklist with editable labels and on-device checkboxes
 - Live ticker/card with quotes, technology headlines, or mixed rotation with local fallback
+- Daily local Bible reflection with psalm/verse reference and short prompt, available without internet
 - On-device Setup page for brightness, city presets, live content mode, and Wi-Fi portal
 - Local browser settings page after the board joins Wi-Fi
 - Open-Meteo weather, hourly forecast, daily forecast, wind, UV, and rain probability
