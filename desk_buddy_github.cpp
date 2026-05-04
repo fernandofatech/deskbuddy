@@ -250,16 +250,19 @@ String lastInsightText = "";
 String lastWeatherPanelText = "";
 String lastNetworkPanelText = "";
 int networkToolPage = 0;
-const int NETWORK_TOOL_PAGE_COUNT = 4;
+const int NETWORK_TOOL_PAGE_COUNT = 6;
+int wifiDetailIndex = 0;
 
 struct WifiScanItem {
   String ssid;
+  String bssid;
   int32_t rssi;
   int32_t channel;
   wifi_auth_mode_t auth;
+  bool hidden;
 };
 
-const int WIFI_SCAN_MAX = 6;
+const int WIFI_SCAN_MAX = 10;
 WifiScanItem wifiScanItems[WIFI_SCAN_MAX];
 int wifiScanCount = 0;
 unsigned long lastWifiScanMs = 0;
@@ -1662,11 +1665,24 @@ void scanWifiNetworksNow() {
     wifiScanCount = min(found, WIFI_SCAN_MAX);
     for (int i = 0; i < wifiScanCount; i++) {
       wifiScanItems[i].ssid = WiFi.SSID(i);
+      wifiScanItems[i].bssid = WiFi.BSSIDstr(i);
       wifiScanItems[i].rssi = WiFi.RSSI(i);
       wifiScanItems[i].channel = WiFi.channel(i);
       wifiScanItems[i].auth = WiFi.encryptionType(i);
+      wifiScanItems[i].hidden = wifiScanItems[i].ssid.length() == 0;
+      if (wifiScanItems[i].hidden) wifiScanItems[i].ssid = "<hidden>";
+    }
+    for (int i = 0; i < wifiScanCount - 1; i++) {
+      for (int j = i + 1; j < wifiScanCount; j++) {
+        if (wifiScanItems[j].rssi > wifiScanItems[i].rssi) {
+          WifiScanItem tmp = wifiScanItems[i];
+          wifiScanItems[i] = wifiScanItems[j];
+          wifiScanItems[j] = tmp;
+        }
+      }
     }
   }
+  wifiDetailIndex = constrain(wifiDetailIndex, 0, max(0, wifiScanCount - 1));
   WiFi.scanDelete();
   lastWifiScanMs = millis();
   wifiScanBusy = false;
@@ -2771,11 +2787,22 @@ void drawNetworkHeader(const String& title, const String& action) {
   tft.drawRightString(action.c_str(), 222, 35, 1);
 }
 
+int channelLoad(int channel) {
+  int load = 0;
+  for (int i = 0; i < wifiScanCount; i++) {
+    if (wifiScanItems[i].channel == channel) {
+      int strength = constrain(100 + wifiScanItems[i].rssi, 5, 70);
+      load += strength;
+    }
+  }
+  return constrain(load, 0, 120);
+}
+
 void updateStatusDynamic() {
   String key = String(networkToolPage) + "|" + wifiStatusText() + "|" + signalText() + "|" + ipText() + "|" + gatewayText() + "|" +
                dnsText() + "|" + gatewayServiceText + "|" + String(wifiScanCount) + "|" + String(wifiEnabled ? 1 : 0);
   for (int i = 0; i < wifiScanCount; i++) {
-    key += "|" + wifiScanItems[i].ssid + ":" + String(wifiScanItems[i].rssi) + ":" + String(wifiScanItems[i].channel);
+    key += "|" + wifiScanItems[i].ssid + ":" + wifiScanItems[i].bssid + ":" + String(wifiScanItems[i].rssi) + ":" + String(wifiScanItems[i].channel);
   }
   if (key == lastNetworkPanelText) return;
   lastNetworkPanelText = key;
@@ -2815,6 +2842,50 @@ void updateStatusDynamic() {
       }
     }
   } else if (networkToolPage == 2) {
+    drawNetworkHeader("Network Detail", "Tap next");
+    if (wifiScanCount == 0) {
+      tft.setTextColor(COL_TEXT, COL_PANEL);
+      tft.drawString("Run WiFi Scanner first", 18, 86, 2);
+    } else {
+      wifiDetailIndex = constrain(wifiDetailIndex, 0, wifiScanCount - 1);
+      WifiScanItem item = wifiScanItems[wifiDetailIndex];
+      tft.setTextColor(COL_DIM, COL_PANEL);
+      tft.drawString("SSID", 18, 68, 1);
+      tft.setTextColor(COL_TEXT, COL_PANEL);
+      tft.drawString(item.ssid.substring(0, 25), 18, 84, 2);
+      tft.setTextColor(COL_DIM, COL_PANEL);
+      tft.drawString("BSSID", 18, 114, 1);
+      tft.setTextColor(COL_TEXT, COL_PANEL);
+      tft.drawString(item.bssid, 18, 130, 2);
+      tft.setTextColor(COL_DIM, COL_PANEL);
+      tft.drawString("Signal", 18, 162, 1);
+      tft.drawString("Channel", 104, 162, 1);
+      tft.drawString("Security", 168, 162, 1);
+      tft.setTextColor(item.rssi > -60 ? COL_GREEN : (item.rssi > -75 ? COL_YELLOW : COL_DIM), COL_PANEL);
+      tft.drawString(String(item.rssi) + "dBm", 18, 180, 2);
+      tft.setTextColor(COL_TEXT, COL_PANEL);
+      tft.drawString(String(item.channel), 110, 180, 2);
+      tft.drawRightString(authModeText(item.auth).c_str(), 222, 180, 2);
+      tft.setTextColor(COL_ACCENT, COL_PANEL);
+      tft.drawString("Item " + String(wifiDetailIndex + 1) + "/" + String(wifiScanCount), 18, 226, 2);
+    }
+  } else if (networkToolPage == 3) {
+    drawNetworkHeader("Channel Map", "Tap scan");
+    tft.setTextColor(COL_DIM, COL_PANEL);
+    tft.drawString("2.4 GHz channel congestion", 18, 65, 1);
+    for (int ch = 1; ch <= 13; ch++) {
+      int x = 20 + (ch - 1) * 15;
+      int load = channelLoad(ch);
+      int h = map(load, 0, 120, 4, 118);
+      uint16_t barColor = load > 80 ? COL_RED : (load > 45 ? COL_YELLOW : COL_ACCENT);
+      tft.drawFastVLine(x + 6, 198 - h, h, barColor);
+      tft.drawFastVLine(x + 7, 198 - h, h, barColor);
+      tft.setTextColor(COL_DIM, COL_PANEL);
+      if (ch == 1 || ch == 6 || ch == 11) tft.drawCentreString(String(ch).c_str(), x + 6, 208, 1);
+    }
+    tft.setTextColor(COL_TEXT, COL_PANEL);
+    tft.drawString("APs " + String(wifiScanCount), 18, 232, 2);
+  } else if (networkToolPage == 4) {
     drawNetworkHeader("Gateway Tools", "Tap check");
     tft.setTextColor(COL_DIM, COL_PANEL);
     tft.drawString("Host", 18, 70, 1);
@@ -3095,9 +3166,11 @@ bool handleStatusTouch(int x, int y) {
       networkToolPage = (networkToolPage + NETWORK_TOOL_PAGE_COUNT - 1) % NETWORK_TOOL_PAGE_COUNT;
     } else if (x > SCREEN_W * 3 / 4) {
       networkToolPage = (networkToolPage + 1) % NETWORK_TOOL_PAGE_COUNT;
-    } else if (networkToolPage == 1) {
+    } else if (networkToolPage == 1 || networkToolPage == 3) {
       scanWifiNetworksNow();
     } else if (networkToolPage == 2) {
+      if (wifiScanCount > 0) wifiDetailIndex = (wifiDetailIndex + 1) % wifiScanCount;
+    } else if (networkToolPage == 4) {
       gatewayServiceText = detectGatewayServices();
     } else {
       networkToolPage = (networkToolPage + 1) % NETWORK_TOOL_PAGE_COUNT;

@@ -52,10 +52,12 @@ Edit checklist labels in the browser settings page, then tap rows on the device 
 
 The `Net` page is a standalone safe diagnostics console for your own device and network.
 
-It has four tool screens:
+It has six tool screens:
 
 - Network Console: Wi-Fi state, SSID, signal, IP, gateway, and DNS
 - WiFi Scanner: nearby 2.4 GHz networks with RSSI, channel, and security type
+- Network Detail: SSID, BSSID, signal, channel, and security for a selected AP
+- Channel Map: channel congestion across the 2.4 GHz band
 - Gateway Tools: common gateway service checks such as DNS, HTTP, HTTPS, or SSH when reachable
 - Device Info: MAC address, subnet, uptime, and last sync
 
