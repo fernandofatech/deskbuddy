@@ -27,6 +27,7 @@ If the screen stays white, replace the installed TFT_eSPI `User_Setup.h` with th
 
 - Minimal touch UI with Home, Weather, Notes, Status, and Setup pages
 - Redesigned Home page with clock, weather, focus, note, and scrolling live ticker
+- Show Mode on Home with rotating large-format slides for clock, weather, focus, checklist, and live briefing
 - Apple-inspired Weather page with current conditions, hourly forecast, and 7-day forecast
 - Focus timer with configurable presets and completion alert
 - Notes card for quick daily reminders
@@ -100,6 +101,8 @@ Then edit:
 ```
 
 `arduino_secrets.h` is ignored by Git. If credentials are not present, use the board's Setup page to open the `Deskbuddy Setup` Wi-Fi portal.
+
+Optional AI/API keys must also stay in `arduino_secrets.h`; never commit real keys.
 
 ## Documentation
 

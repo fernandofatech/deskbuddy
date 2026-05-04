@@ -67,10 +67,10 @@ Never commit:
 - `arduino_secrets.h`
 - real SSIDs
 - real Wi-Fi passwords
+- real API keys
 
 Run this before committing if credentials were used locally:
 
 ```sh
 rg -n "YOUR_REAL_WIFI_OR_PASSWORD" -S .
 ```
-
