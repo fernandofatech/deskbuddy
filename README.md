@@ -92,3 +92,12 @@ firmware/deskbuddy-esp32-2432s028r-cyd.bin
 ```
 
 GitHub Actions creates that file from the Arduino CLI build output.
+## Portfolio / Portfólio
+
+- **Live / Ao vivo:** [Deskbuddy](https://fernando.moretes.com)
+- **GitHub:** [fernandofatech/Deskbuddy](https://github.com/fernandofatech/Deskbuddy)
+- **Author / Autor:** [Fernando Francisco Azevedo](https://fernando.moretes.com) · [LinkedIn](https://www.linkedin.com/in/fernando-francisco-azevedo/) · [GitHub](https://github.com/fernandofatech)
+
+**PT-BR:** Public fork tracked in Fernando Moretes GitHub portfolio. Este repositório público faz parte do ecossistema de portfólio de Fernando Moretes.
+
+**EN:** Public fork tracked in Fernando Moretes GitHub portfolio. This public repository is part of Fernando Moretes' portfolio ecosystem.
